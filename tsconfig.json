@@ -1,0 +1,1 @@
+{"compilerOptions":{"strict":true},"exclude":["node_modules","tests"],"extends":"expo/tsconfig.base","include":["**/*.ts","**/*.tsx",".expo/types/**/*.ts","expo-env.d.ts"]}

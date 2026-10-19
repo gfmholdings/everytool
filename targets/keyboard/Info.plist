@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>NSExtension</key>
+    <dict>
+      <key>NSExtensionPointIdentifier</key>
+      <string>com.apple.keyboard-service</string>
+      <key>NSExtensionPrincipalClass</key>
+      <string>$(PRODUCT_MODULE_NAME).KeyboardViewController</string>
+      <key>NSExtensionAttributes</key>
+      <dict>
+        <!-- Open access is requested for two things only: reading the
+             system clipboard (the Text tab's "from clipboard" source)
+             and the App Group vault. The keyboard types perfectly well
+             with it off; the tabs say so when data is unavailable. The
+             keyboard never uses the network — that is a product promise,
+             and nothing in this target links a networking call. -->
+        <key>RequestsOpenAccess</key>
+        <true/>
+        <key>IsASCIICapable</key>
+        <false/>
+        <key>PrefersRightToLeft</key>
+        <false/>
+        <key>PrimaryLanguage</key>
+        <string>en-US</string>
+      </dict>
+    </dict>
+  </dict>
+</plist>

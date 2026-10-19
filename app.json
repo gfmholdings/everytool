@@ -1,0 +1,56 @@
+{
+  "expo": {
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#FFF6E9",
+        "foregroundImage": "./assets/icon.png"
+      },
+      "package": "app.everytool.ios"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "REPLACE_WITH_EVERYTOOL_EAS_PROJECT_ID"
+      }
+    },
+    "icon": "./assets/icon.png",
+    "ios": {
+      "appleTeamId": "8H56KM6SCW",
+      "bundleIdentifier": "app.everytool.ios",
+      "entitlements": {
+        "com.apple.security.application-groups": [
+          "group.app.everytool.ios"
+        ]
+      },
+      "infoPlist": {
+        "NSCameraUsageDescription": "Everytool uses the camera to scan QR codes. Nothing leaves your phone.",
+        "NSMicrophoneUsageDescription": "Everytool never records audio. This is only requested if you start a screen recording that includes sound.",
+        "NSPhotoLibraryAddUsageDescription": "Everytool saves finished screenshots, images and GIFs to your photo library.",
+        "NSPhotoLibraryUsageDescription": "Everytool reads the photos you pick so it can stitch, convert, resize and make GIFs — all on this phone."
+      },
+      "supportsTablet": false
+    },
+    "name": "Everytool",
+    "orientation": "portrait",
+    "plugins": [
+      "expo-status-bar",
+      "@bacons/apple-targets",
+      "expo-image-picker",
+      "expo-camera",
+      "expo-media-library",
+      "@react-native-community/datetimepicker"
+    ],
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    },
+    "scheme": "everytool",
+    "slug": "everytool",
+    "updates": {
+      "url": "https://u.expo.dev/REPLACE_WITH_EVERYTOOL_EAS_PROJECT_ID"
+    },
+    "userInterfaceStyle": "automatic",
+    "version": "1.0.0",
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
