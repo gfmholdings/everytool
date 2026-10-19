@@ -9,6 +9,7 @@ on:
 
 env:
   EXPO_NO_TELEMETRY: "1"
+  ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
 
 jobs:
   build:
@@ -143,12 +144,12 @@ jobs:
           if-no-files-found: error
 
       - name: Note — TestFlight upload skipped
-        if: ${{ secrets.ASC_ISSUER_ID == '' }}
+        if: ${{ env.ASC_ISSUER_ID == '' }}
         run: |
           echo "::notice::ASC_ISSUER_ID secret is not set yet — skipping the App Store Connect upload. The .ipa was built and is available as the Everytool-ipa workflow artifact."
 
       - name: Upload to App Store Connect (TestFlight)
-        if: ${{ secrets.ASC_ISSUER_ID != '' }}
+        if: ${{ env.ASC_ISSUER_ID != '' }}
         env:
           ASC_API_KEY_B64: ${{ secrets.ASC_API_KEY_B64 }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
