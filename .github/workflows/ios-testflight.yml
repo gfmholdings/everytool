@@ -108,8 +108,20 @@ jobs:
             -archivePath "$RUNNER_TEMP/Everytool.xcarchive" \
             CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             > "$RUNNER_TEMP/archive.log" 2>&1; then
-            echo "::error::xcodebuild archive FAILED — last 150 log lines:"
-            tail -150 "$RUNNER_TEMP/archive.log"
+            echo "::error::xcodebuild archive FAILED — diagnostics from archive.log:"
+            mkdir -p build/logs && cp "$RUNNER_TEMP/archive.log" build/logs/ || true
+            echo "----- all error: lines -----"
+            grep -n -E "error:|fatal error" "$RUNNER_TEMP/archive.log" | head -100 || true
+            FIRST="$(grep -n -m1 -E "error:" "$RUNNER_TEMP/archive.log" | cut -d: -f1 || true)"
+            if [ -n "${FIRST:-}" ]; then
+              START=$(( FIRST > 30 ? FIRST - 30 : 1 ))
+              echo "----- context around first error (lines $START..$((FIRST + 80))) -----"
+              sed -n "${START},$((FIRST + 80))p" "$RUNNER_TEMP/archive.log"
+            fi
+            echo "----- failed build commands summary -----"
+            grep -n -A8 "The following build commands failed" "$RUNNER_TEMP/archive.log" || true
+            echo "----- last 40 lines -----"
+            tail -40 "$RUNNER_TEMP/archive.log"
             exit 1
           fi
           echo "Archive succeeded:"
@@ -125,7 +137,9 @@ jobs:
             -exportPath build/export \
             -exportOptionsPlist scripts/ExportOptions.plist \
             > "$RUNNER_TEMP/export.log" 2>&1; then
-            echo "::error::xcodebuild -exportArchive FAILED — last 150 log lines:"
+            echo "::error::xcodebuild -exportArchive FAILED — export.log:"
+            mkdir -p build/logs && cp "$RUNNER_TEMP/export.log" build/logs/ || true
+            grep -n -E "error:" "$RUNNER_TEMP/export.log" | head -50 || true
             tail -150 "$RUNNER_TEMP/export.log"
             exit 1
           fi
@@ -164,6 +178,14 @@ jobs:
             --file "$IPA_PATH" \
             --apiKey "$ASC_KEY_ID" \
             --apiIssuer "$ASC_ISSUER_ID"
+
+      - name: Upload build logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: build/logs/
+          if-no-files-found: ignore
 
       - name: Delete signing keychain
         if: always()
