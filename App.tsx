@@ -10,6 +10,10 @@ import {
   Text,
   View,
 } from 'react-native';
+import {
+  SafeAreaProvider,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 
 import { ToolGlyph } from './src/components/ui';
 import { drainShareInbox } from './src/lib/incoming';
@@ -38,6 +42,7 @@ interface Pending {
 }
 
 function Root() {
+  const insets = useSafeAreaInsets();
   const { ready, addClip } = useStore();
   const [tool, setTool] = useState<ToolId | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
@@ -232,7 +237,12 @@ function Root() {
   return (
     <View style={styles.root}>
       {screen ?? (
-        <ScrollView contentContainerStyle={styles.home}>
+        <ScrollView
+          contentContainerStyle={[
+            styles.home,
+            { paddingTop: insets.top + 24 },
+          ]}
+        >
           <Text style={type.h1}>Everytool</Text>
           <Text style={[type.small, styles.intro]}>
             The small tools your phone is missing. Everything happens on
@@ -281,10 +291,12 @@ function Root() {
 
 export default function App() {
   return (
-    <AppStoreProvider>
-      <StatusBar style="auto" />
-      <Root />
-    </AppStoreProvider>
+    <SafeAreaProvider>
+      <AppStoreProvider>
+        <StatusBar style="auto" />
+        <Root />
+      </AppStoreProvider>
+    </SafeAreaProvider>
   );
 }
 

@@ -9,6 +9,7 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path, Rect, Circle } from 'react-native-svg';
 
 import { colors, space, type } from '../theme';
@@ -80,8 +81,9 @@ export function ToolShell({
   onBack: () => void;
   children: ReactNode;
 }) {
+  const insets = useSafeAreaInsets();
   return (
-    <View style={styles.shell}>
+    <View style={[styles.shell, { paddingTop: insets.top }]}>
       <View style={styles.shellHeader}>
         <Pressable
           accessibilityLabel="Back"
