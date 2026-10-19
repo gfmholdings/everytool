@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>teamID</key>
+	<string>8H56KM6SCW</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>stripSwiftSymbols</key>
+	<true/>
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+	<key>uploadBitcode</key>
+	<false/>
+	<key>uploadSymbols</key>
+	<true/>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>app.everytool.ios</key>
+		<string>Everytool App Store</string>
+		<key>app.everytool.ios.keyboard</key>
+		<string>Everytool Keyboard App Store</string>
+		<key>app.everytool.ios.share</key>
+		<string>Everytool Share App Store</string>
+		<key>app.everytool.ios.widget</key>
+		<string>Everytool Controls App Store</string>
+		<key>app.everytool.ios.broadcast</key>
+		<string>Everytool Broadcast App Store</string>
+		<key>app.everytool.ios.broadcastui</key>
+		<string>Everytool BroadcastUI App Store</string>
+	</dict>
+</dict>
+</plist>
