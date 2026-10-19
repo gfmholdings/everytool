@@ -51,6 +51,34 @@ test('PNG roundtrip: writer output decodes back exactly', () => {
   assert.deepEqual(new Uint8Array(rows), rgba);
 });
 
+test('decodePngRows: JPEG bytes are named, not called an unsupported PNG', () => {
+  const jpeg = new Uint8Array([
+    0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01,
+  ]);
+  assert.throws(() => decodePngRows(jpeg, () => {}), /JPEG/);
+});
+
+test('decodePngRows: HEIC (ftyp) bytes are named, not called an unsupported PNG', () => {
+  const heic = new Uint8Array([
+    0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63,
+  ]);
+  assert.throws(() => decodePngRows(heic, () => {}), /HEIC/);
+});
+
+test('decodePngRows: a minimal 1x1 PNG literal decodes', () => {
+  const b64 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const png = new Uint8Array(Buffer.from(b64, 'base64'));
+  let rowCount = 0;
+  const info = decodePngRows(png, () => {
+    rowCount += 1;
+  });
+  assert.equal(info.width, 1);
+  assert.equal(info.height, 1);
+  assert.equal(info.channels, 4);
+  assert.equal(rowCount, 1);
+});
+
 test('PNG roundtrip: tall strip (multi-block stored stream)', () => {
   const w = 64;
   const h = 600; // 600 * 257 bytes of scanlines > 65535 → several blocks

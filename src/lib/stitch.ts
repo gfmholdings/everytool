@@ -105,16 +105,16 @@ export async function stitchShots(shots: ShotInput[]): Promise<StitchResult> {
   const sizes: Size[] = shots.map((s) => ({ width: s.width, height: s.height }));
   const width = stitchWidth(sizes);
 
+  // EVERY shot is re-encoded to PNG at plan width — including one whose
+  // width already matches. Picker originals are often HEIC/JPEG, and the
+  // row decoder below only speaks PNG; the re-encode is the guarantee,
+  // not just a resize.
   const normalized: ShotInput[] = [];
   for (const shot of shots) {
-    if (shot.width === width) {
-      normalized.push(shot);
-    } else {
-      const r = await manipulateAsync(shot.uri, [{ resize: { width } }], {
-        format: SaveFormat.PNG,
-      });
-      normalized.push({ uri: r.uri, width: r.width, height: r.height });
-    }
+    const r = await manipulateAsync(shot.uri, [{ resize: { width } }], {
+      format: SaveFormat.PNG,
+    });
+    normalized.push({ uri: r.uri, width: r.width, height: r.height });
   }
 
   // Resolve every seam before writing, so the plan (and the height cap)
@@ -189,75 +189,27 @@ export async function stitchShots(shots: ShotInput[]): Promise<StitchResult> {
 }
 
 /**
- * Assemble frames the broadcast extension left in the App Group inbox
- * (`{ uri, width, height, offsetY }` — offsets come from the scroll the
- * user actually performed). Frames are composited at their offsets into
- * one strip with the same streaming writer; gaps are filled with white.
+ * Assemble frames the broadcast extension left in the App Group inbox.
+ * The extension writes plain frames in capture order — it records no
+ * scroll offsets — so a multi-frame recording goes through the same
+ * content-overlap pipeline as picked screenshots. A single frame IS
+ * the screenshot; hand it back untouched.
  */
 export async function stitchRecordedFrames(
-  frames: { uri: string; width: number; height: number; offsetY: number }[],
+  frames: { uri: string; width: number; height: number }[],
 ): Promise<StitchResult> {
   if (frames.length === 0) throw new Error('No frames were recorded.');
-  const sorted = [...frames].sort((a, b) => a.offsetY - b.offsetY);
-  const width = stitchWidth(sorted.map((f) => ({ width: f.width, height: f.height })));
-  const totalHeight = Math.max(...sorted.map((f) => f.offsetY + f.height));
-  const scale = width / Math.max(1, sorted[0]?.width ?? width);
-  const scaledTotal = Math.round(totalHeight * scale);
-
-  const outName = `stitch-rec-${Date.now().toString(36)}.png`;
-  const outFile = new File(Paths.cache, outName);
-  if (outFile.exists) outFile.delete();
-  outFile.create();
-  const handle = outFile.open(FileMode.WriteOnly);
-  const sink = {
-    write: (bytes: Uint8Array) => {
-      handle.writeBytes(bytes);
-    },
-  };
-  const white = new Uint8Array(width * 4).fill(255);
-  try {
-    const writer = new PngStreamWriter(sink, width, scaledTotal);
-    let cursor = 0; // next output row to write, in scaled space
-    for (const frame of sorted) {
-      const top = Math.round(frame.offsetY * scale);
-      const bytes = await new File(frame.uri).bytes();
-      const frameRows: Uint8Array[] = [];
-      decodePngRows(bytes, (_y, rgba) => frameRows.push(rgba));
-      // Frames arrive at plan width already (the extension normalizes);
-      // write any gap as white, then the frame's rows past the cursor.
-      while (cursor < top) {
-        writer.writeRow(white);
-        cursor += 1;
-      }
-      for (let y = 0; y < frameRows.length; y += 1) {
-        const outY = top + y;
-        if (outY >= cursor) {
-          writer.writeRow(frameRows[y] ?? white);
-          cursor = outY + 1;
-        }
-      }
-    }
-    while (cursor < scaledTotal) {
-      writer.writeRow(white);
-      cursor += 1;
-    }
-    writer.finish();
-  } finally {
-    handle.close();
+  const only = frames[0];
+  if (frames.length === 1 && only) {
+    return {
+      uri: only.uri,
+      width: only.width,
+      height: only.height,
+      stacked: false,
+      capped: false,
+    };
   }
-
-  let outUri = outFile.uri;
-  let outWidth = width;
-  let outHeight = scaledTotal;
-  if (scaledTotal > 8192) {
-    const targetW = Math.max(1, Math.round(width * (8192 / scaledTotal)));
-    const r = await manipulateAsync(outUri, [{ resize: { width: targetW } }], {
-      format: SaveFormat.PNG,
-    });
-    outUri = r.uri;
-    outWidth = r.width;
-    outHeight = r.height;
-    return { uri: outUri, width: outWidth, height: outHeight, stacked: false, capped: true };
-  }
-  return { uri: outUri, width: outWidth, height: outHeight, stacked: false, capped: false };
+  return stitchShots(
+    frames.map((f) => ({ uri: f.uri, width: f.width, height: f.height })),
+  );
 }

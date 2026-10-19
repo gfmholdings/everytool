@@ -28,7 +28,7 @@ export function StitchScreen({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recorded, setRecorded] = useState<
-    { uri: string; width: number; height: number; offsetY: number }[] | null
+    { uri: string; width: number; height: number }[] | null
   >(null);
 
   // A finished screen recording lands in the broadcast inbox; offer it the

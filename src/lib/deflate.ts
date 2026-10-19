@@ -172,6 +172,36 @@ export function decodePngRows(
   bytes: Uint8Array,
   onRow: (y: number, rgbaRow: Uint8Array) => void,
 ): PngInfo {
+  // Verify the PNG signature before chunk parsing, and name the actual
+  // format when a foreign file slips through: "Unsupported PNG format"
+  // told the user nothing when the real problem was a HEIC/JPEG photo.
+  // (Everytool's own pipeline re-encodes to PNG before decoding, so a
+  // foreign format here means a foreign file reached the decoder.)
+  const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  const isPng =
+    bytes.length >= PNG_SIGNATURE.length &&
+    PNG_SIGNATURE.every((b, i) => bytes[i] === b);
+  if (!isPng) {
+    if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+      throw new Error(
+        'That image is a JPEG — Everytool stitches PNG screenshots.',
+      );
+    }
+    if (
+      bytes.length >= 8 &&
+      String.fromCharCode(
+        bytes[4] ?? 0,
+        bytes[5] ?? 0,
+        bytes[6] ?? 0,
+        bytes[7] ?? 0,
+      ) === 'ftyp'
+    ) {
+      throw new Error(
+        'That image is HEIC — Everytool stitches PNG screenshots.',
+      );
+    }
+    throw new Error('Unsupported image format — not a PNG.');
+  }
   let width = 0;
   let height = 0;
   let bitDepth = 8;
