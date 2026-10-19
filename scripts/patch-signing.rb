@@ -22,6 +22,9 @@ abort 'ERROR: no .xcodeproj found under ios/ — did prebuild run?' unless proje
 project = Xcodeproj::Project.open(project_path)
 puts "Project targets: #{project.targets.map(&:name).join(', ')}"
 
+BUILD_NUMBER = ENV['BUILD_NUMBER']
+abort 'ERROR: BUILD_NUMBER env not set — the workflow must pass the run number so every target (app + extensions) shares one CFBundleVersion (ITMS-90473).' if BUILD_NUMBER.nil? || BUILD_NUMBER.empty?
+
 found = []
 project.targets.each do |target|
   specifier = PROFILES[target.name]
@@ -30,6 +33,7 @@ project.targets.each do |target|
   found << target.name
   target.build_configurations.each do |config|
     settings = config.build_settings
+    settings['CURRENT_PROJECT_VERSION'] = BUILD_NUMBER
     settings['CODE_SIGN_STYLE'] = 'Manual'
     settings['DEVELOPMENT_TEAM'] = TEAM_ID
     settings['PROVISIONING_PROFILE_SPECIFIER'] = specifier

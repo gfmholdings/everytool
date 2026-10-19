@@ -104,6 +104,8 @@ jobs:
         run: npx expo prebuild --platform ios --clean
 
       - name: Patch signing settings (manual)
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
         run: |
           if ! ruby -e "require 'xcodeproj'" 2>/dev/null; then
             echo "xcodeproj gem missing — installing"
