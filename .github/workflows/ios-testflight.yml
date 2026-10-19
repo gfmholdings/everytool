@@ -1,0 +1,169 @@
+name: iOS — Build & TestFlight
+
+# Manual trigger only. Builds the app on a GitHub macOS runner with manual
+# signing (portal-made distribution cert + App Store profiles, stored as
+# repo secrets), exports an App Store .ipa, and — once the ASC_ISSUER_ID
+# secret is set — uploads it to App Store Connect / TestFlight.
+on:
+  workflow_dispatch:
+
+env:
+  EXPO_NO_TELEMETRY: "1"
+
+jobs:
+  build:
+    name: Archive & export (macOS)
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install signing certificate & provisioning profiles
+        env:
+          CERT_P12_BASE64: ${{ secrets.CERT_P12_BASE64 }}
+          CERT_P12_PASSWORD: ${{ secrets.CERT_P12_PASSWORD }}
+          PROFILE_APP_B64: ${{ secrets.PROFILE_APP_B64 }}
+          PROFILE_KEYBOARD_B64: ${{ secrets.PROFILE_KEYBOARD_B64 }}
+          PROFILE_SHARE_B64: ${{ secrets.PROFILE_SHARE_B64 }}
+          PROFILE_WIDGET_B64: ${{ secrets.PROFILE_WIDGET_B64 }}
+          PROFILE_BROADCAST_B64: ${{ secrets.PROFILE_BROADCAST_B64 }}
+          PROFILE_BROADCASTUI_B64: ${{ secrets.PROFILE_BROADCASTUI_B64 }}
+        run: |
+          set -euo pipefail
+
+          # --- Temporary keychain with the distribution certificate ---
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          echo "$CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$CERT_P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+          echo "Code signing identities in build keychain:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+          # --- Provisioning profiles, installed under their UUIDs ---
+          PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PROFILES_DIR"
+
+          install_profile() {
+            local var_name="$1"
+            local raw="$RUNNER_TEMP/$var_name.mobileprovision"
+            echo "${!var_name}" | base64 --decode > "$raw"
+            local plist="$RUNNER_TEMP/$var_name.plist"
+            security cms -D -i "$raw" > "$plist"
+            local uuid name
+            uuid="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$plist")"
+            name="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$plist")"
+            cp "$raw" "$PROFILES_DIR/$uuid.mobileprovision"
+            echo "Installed profile: $name ($uuid)"
+          }
+
+          install_profile PROFILE_APP_B64
+          install_profile PROFILE_KEYBOARD_B64
+          install_profile PROFILE_SHARE_B64
+          install_profile PROFILE_WIDGET_B64
+          install_profile PROFILE_BROADCAST_B64
+          install_profile PROFILE_BROADCASTUI_B64
+
+      - name: Prebuild iOS project
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Patch signing settings (manual)
+        run: |
+          if ! ruby -e "require 'xcodeproj'" 2>/dev/null; then
+            echo "xcodeproj gem missing — installing"
+            sudo gem install xcodeproj --no-document
+          fi
+          ruby scripts/patch-signing.rb
+
+      - name: Archive
+        run: |
+          set -uo pipefail
+          if ! xcodebuild archive \
+            -workspace ios/Everytool.xcworkspace \
+            -scheme Everytool \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Everytool.xcarchive" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            > "$RUNNER_TEMP/archive.log" 2>&1; then
+            echo "::error::xcodebuild archive FAILED — last 150 log lines:"
+            tail -150 "$RUNNER_TEMP/archive.log"
+            exit 1
+          fi
+          echo "Archive succeeded:"
+          grep -E "ARCHIVE SUCCEEDED" "$RUNNER_TEMP/archive.log" || true
+          ls -la "$RUNNER_TEMP/Everytool.xcarchive"
+
+      - name: Export .ipa
+        run: |
+          set -uo pipefail
+          mkdir -p build/export
+          if ! xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Everytool.xcarchive" \
+            -exportPath build/export \
+            -exportOptionsPlist scripts/ExportOptions.plist \
+            > "$RUNNER_TEMP/export.log" 2>&1; then
+            echo "::error::xcodebuild -exportArchive FAILED — last 150 log lines:"
+            tail -150 "$RUNNER_TEMP/export.log"
+            exit 1
+          fi
+          echo "Export succeeded:"
+          grep -E "EXPORT SUCCEEDED" "$RUNNER_TEMP/export.log" || true
+          ls -lh build/export
+          IPA_PATH="$(ls build/export/*.ipa | head -1)"
+          echo "IPA_PATH=$IPA_PATH" >> "$GITHUB_ENV"
+          echo "Exported IPA: $IPA_PATH"
+
+      - name: Upload .ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Everytool-ipa
+          path: ${{ env.IPA_PATH }}
+          if-no-files-found: error
+
+      - name: Note — TestFlight upload skipped
+        if: ${{ secrets.ASC_ISSUER_ID == '' }}
+        run: |
+          echo "::notice::ASC_ISSUER_ID secret is not set yet — skipping the App Store Connect upload. The .ipa was built and is available as the Everytool-ipa workflow artifact."
+
+      - name: Upload to App Store Connect (TestFlight)
+        if: ${{ secrets.ASC_ISSUER_ID != '' }}
+        env:
+          ASC_API_KEY_B64: ${{ secrets.ASC_API_KEY_B64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          echo "$ASC_API_KEY_B64" | base64 --decode > "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$IPA_PATH" \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID"
+
+      - name: Delete signing keychain
+        if: always()
+        run: security delete-keychain "$KEYCHAIN_PATH" || true
