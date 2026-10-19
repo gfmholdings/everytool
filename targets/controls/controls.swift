@@ -55,7 +55,7 @@ struct QrControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "app.everytool.ios.controls.qr") {
             ControlWidgetButton(action: OpenToolIntent(tool: "qr")) {
-                Label("QR", systemImage: "qrcode.viewfinder")
+                Label("QR", systemImage: "qrcode")
             }
         }
         .displayName("QR")
