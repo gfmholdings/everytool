@@ -86,6 +86,20 @@ jobs:
           install_profile PROFILE_BROADCAST_B64
           install_profile PROFILE_BROADCASTUI_B64
 
+      - name: Select newest Xcode
+        # Expo SDK 57's prebuilt-RN Swift packages declare swift-tools 6.2
+        # (run 39218079954: "package 'apple' is using Swift tools version
+        # 6.2.0 but the installed version is 6.1.0" inside the
+        # ExpoModulesJSI build). The macos-15 image default Xcode ships
+        # Swift 6.1 — select the newest Xcode installed on the image.
+        run: |
+          set -euo pipefail
+          LATEST_XCODE="$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)"
+          echo "Selecting Xcode: $LATEST_XCODE"
+          sudo xcode-select -s "$LATEST_XCODE/Contents/Developer"
+          xcodebuild -version
+          swift --version
+
       - name: Prebuild iOS project
         run: npx expo prebuild --platform ios --clean
 
