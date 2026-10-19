@@ -335,6 +335,19 @@ final class KeyboardViewController: UIInputViewController {
       stack.widthAnchor.constraint(equalTo: scroll.widthAnchor),
     ])
 
+    // The current system clipboard rides on top — but only with Full
+    // Access: without it the extension sandbox cannot read UIPasteboard
+    // at all, so the read is gated strictly on hasFullAccess.
+    let currentClip = hasFullAccess ? (UIPasteboard.general.string ?? "") : ""
+    if !currentClip.isEmpty {
+      let currentLabel = UILabel()
+      currentLabel.text = "Current clipboard"
+      currentLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+      currentLabel.textColor = .secondaryLabel
+      stack.addArrangedSubview(currentLabel)
+      stack.addArrangedSubview(clipRow(text: currentClip, pinned: false))
+    }
+
     let clips = SharedVault.clips()
     if clips.isEmpty {
       let label = UILabel()
@@ -357,20 +370,25 @@ final class KeyboardViewController: UIInputViewController {
     for clip in clips {
       guard let text = clip["text"] as? String else { continue }
       let pinned = (clip["pinned"] as? Bool) ?? false
-      let b = UIButton(type: .system)
-      b.setTitle((pinned ? "★ " : "") + text, for: .normal)
-      b.setTitleColor(.label, for: .normal)
-      b.titleLabel?.font = .systemFont(ofSize: 15)
-      b.titleLabel?.numberOfLines = 2
-      b.titleLabel?.lineBreakMode = .byTruncatingTail
-      b.contentHorizontalAlignment = .left
-      b.backgroundColor = keyBackground
-      b.layer.cornerRadius = 8
-      b.contentEdgeInsets = UIEdgeInsets(top: 9, left: 12, bottom: 9, right: 12)
-      b.accessibilityLabel = text
-      b.addTarget(self, action: #selector(clipTapped(_:)), for: .touchUpInside)
-      stack.addArrangedSubview(b)
+      stack.addArrangedSubview(clipRow(text: text, pinned: pinned))
     }
+  }
+
+  /// One tappable clip row; clipTapped inserts its accessibilityLabel.
+  private func clipRow(text: String, pinned: Bool) -> UIButton {
+    let b = UIButton(type: .system)
+    b.setTitle((pinned ? "★ " : "") + text, for: .normal)
+    b.setTitleColor(.label, for: .normal)
+    b.titleLabel?.font = .systemFont(ofSize: 15)
+    b.titleLabel?.numberOfLines = 2
+    b.titleLabel?.lineBreakMode = .byTruncatingTail
+    b.contentHorizontalAlignment = .left
+    b.backgroundColor = keyBackground
+    b.layer.cornerRadius = 8
+    b.contentEdgeInsets = UIEdgeInsets(top: 9, left: 12, bottom: 9, right: 12)
+    b.accessibilityLabel = text
+    b.addTarget(self, action: #selector(clipTapped(_:)), for: .touchUpInside)
+    return b
   }
 
   @objc private func clipTapped(_ sender: UIButton) {
