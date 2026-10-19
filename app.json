@@ -123,7 +123,8 @@
         "NSCameraUsageDescription": "Everytool uses the camera to scan QR codes. Nothing leaves your phone.",
         "NSMicrophoneUsageDescription": "Everytool never records audio. This is only requested if you start a screen recording that includes sound.",
         "NSPhotoLibraryAddUsageDescription": "Everytool saves finished screenshots, images and GIFs to your photo library.",
-        "NSPhotoLibraryUsageDescription": "Everytool reads the photos you pick so it can stitch, convert, resize and make GIFs — all on this phone."
+        "NSPhotoLibraryUsageDescription": "Everytool reads the photos you pick so it can stitch, convert, resize and make GIFs \u2014 all on this phone.",
+        "ITSAppUsesNonExemptEncryption": false
       },
       "supportsTablet": false
     },
