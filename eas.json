@@ -1,1 +1,28 @@
-{"build":{"development":{"channel":"development","developmentClient":true,"distribution":"internal"},"preview":{"channel":"preview","distribution":"internal","ios":{"simulator":false}},"production":{"autoIncrement":true,"channel":"production"}},"cli":{"appVersionSource":"remote","version":">= 5.0.0"},"submit":{"production":{}}}
+{
+  "build": {
+    "development": {
+      "channel": "development",
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "channel": "preview",
+      "distribution": "internal",
+      "ios": {
+        "simulator": false
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "channel": "production",
+      "credentialsSource": "local"
+    }
+  },
+  "cli": {
+    "appVersionSource": "remote",
+    "version": ">= 5.0.0"
+  },
+  "submit": {
+    "production": {}
+  }
+}
