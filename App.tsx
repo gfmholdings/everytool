@@ -92,17 +92,29 @@ function Root() {
   }, [openTool ]);
 
   // Control Center controls record their tool in the App Group; consume
-  // it whenever the app activates.
+  // it whenever the app activates. The intent's perform() can land just
+  // after the activation event fires, so each activation checks now and
+  // again at ~250ms and ~700ms — takePendingTool clears the key when it
+  // reads it, so the repeats are no-ops once the tool is consumed.
   useEffect(() => {
+    const timers: ReturnType<typeof setTimeout>[] = [];
     const check = () => {
       const id = takePendingTool() as ToolId | null;
       if (id && TOOLS.some((t) => t.id === id)) openTool(id);
     };
-    check();
+    const checkWithRetries = () => {
+      check();
+      timers.push(setTimeout(check, 250));
+      timers.push(setTimeout(check, 700));
+    };
+    checkWithRetries();
     const sub = RNAppState.addEventListener('change', (s) => {
-      if (s === 'active') check();
+      if (s === 'active') checkWithRetries();
     });
-    return () => sub.remove();
+    return () => {
+      sub.remove();
+      timers.forEach((t) => clearTimeout(t));
+    };
   }, [openTool]);
 
   // Drain the share inbox on launch: route each item to the tool the user
