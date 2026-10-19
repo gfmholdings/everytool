@@ -4,7 +4,11 @@ import UIKit
 /// The setup screen iOS shows when the user picks Everytool in the
 /// broadcast picker. It only explains the flow — starting and stopping
 /// the recording is always Apple's own UI, never ours.
-class BroadcastSetupViewController: UIViewController, RPBroadcastActivitySetupViewController {
+// Note: there is no RPBroadcastActivitySetupViewController type in the
+// ReplayKit SDK — a broadcast setup UI extension's principal class is a
+// plain UIViewController. (An earlier draft declared conformance to that
+// nonexistent type and failed compilation.)
+class BroadcastSetupViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
