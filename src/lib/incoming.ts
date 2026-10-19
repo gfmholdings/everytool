@@ -2,13 +2,16 @@ import { Directory, File, Paths } from 'expo-file-system';
 
 import type { ToolId } from '../types';
 import { groupContainerUri } from '../store/sharedVault';
+import { parseInboxIndex } from './inboxIndex';
+
+export { parseInboxIndex };
 
 /**
  * Inboxes in the App Group container, written by the extensions:
  * - ShareInbox/index.json — files shared into Everytool, each tagged with
  *   the tool the user picked in the share sheet.
  * - BroadcastInbox/index.json — frames from a finished screen recording,
- *   with the scroll offsets the broadcast extension measured.
+ *   in capture order (the extension records no scroll offsets).
  * The app drains both whenever it comes to the foreground.
  */
 
@@ -22,8 +25,14 @@ export interface BroadcastFrame {
   file: string; // name inside BroadcastInbox
   width: number;
   height: number;
-  offsetY: number;
 }
+
+/**
+ * The pure index parser lives in inboxIndex.ts (dependency-free, so it
+ * stays unit-testable like the other lib modules); it is imported above
+ * for the drains and re-exported so inbox consumers import everything
+ * from one place.
+ */
 
 function inboxDir(name: string): Directory | null {
   const base = groupContainerUri();
@@ -40,7 +49,7 @@ export async function drainShareInbox(): Promise<
   if (!indexFile.exists) return [];
   try {
     const raw = await indexFile.text();
-    const items = JSON.parse(raw) as SharedItem[];
+    const items = parseInboxIndex(raw).items as SharedItem[];
     const out: { item: SharedItem; uri: string }[] = [];
     const destDir = new Directory(Paths.cache, 'share-inbox');
     if (!destDir.exists) destDir.create();
@@ -61,7 +70,7 @@ export async function drainShareInbox(): Promise<
 }
 
 export async function drainBroadcastInbox(): Promise<
-  { uri: string; width: number; height: number; offsetY: number }[]
+  { uri: string; width: number; height: number }[]
 > {
   const dir = inboxDir('BroadcastInbox');
   if (!dir || !dir.exists) return [];
@@ -69,12 +78,11 @@ export async function drainBroadcastInbox(): Promise<
   if (!indexFile.exists) return [];
   try {
     const raw = await indexFile.text();
-    const frames = JSON.parse(raw) as BroadcastFrame[];
+    const frames = parseInboxIndex(raw).items as BroadcastFrame[];
     const out: {
       uri: string;
       width: number;
       height: number;
-      offsetY: number;
     }[] = [];
     for (const frame of frames) {
       const src = new File(dir, frame.file);
@@ -83,7 +91,6 @@ export async function drainBroadcastInbox(): Promise<
         uri: src.uri,
         width: frame.width,
         height: frame.height,
-        offsetY: frame.offsetY,
       });
     }
     return out;
