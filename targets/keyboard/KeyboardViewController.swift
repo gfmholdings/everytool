@@ -15,7 +15,10 @@ final class KeyboardViewController: UIInputViewController {
     case keys, clipboard, text
   }
 
-  private var tab: Tab = .keys
+  // Named currentTab, not tab: UIViewController grew its own `tab`
+  // property (UITab?) in recent iOS SDKs and a same-named stored
+  // property collides with it.
+  private var currentTab: Tab = .keys
   private var shifted = false
   private var symbols = false
   private var lastSpaceAt: Date?
@@ -53,12 +56,12 @@ final class KeyboardViewController: UIInputViewController {
   override func viewWillAppear(_ animated: Bool) {
     super.viewWillAppear(animated)
     // Refresh whichever tab is showing: clips may have changed in the app.
-    showTab(tab)
+    showTab(currentTab)
   }
 
   override func textDidChange(_ textInput: UITextInput?) {
     super.textDidChange(textInput)
-    if tab == .text { showTab(.text) }
+    if currentTab == .text { showTab(.text) }
   }
 
   // MARK: - Tab bar
@@ -89,7 +92,7 @@ final class KeyboardViewController: UIInputViewController {
 
   private func styleTabBar() {
     for case let b as UIButton in tabBar.arrangedSubviews {
-      let active = b.tag == tab.rawValue
+      let active = b.tag == currentTab.rawValue
       b.backgroundColor = active
         ? UIColor.systemBlue
         : UIColor.secondarySystemBackground.withAlphaComponent(0.7)
@@ -98,7 +101,7 @@ final class KeyboardViewController: UIInputViewController {
   }
 
   private func showTab(_ t: Tab) {
-    tab = t
+    currentTab = t
     styleTabBar()
     content.subviews.forEach { $0.removeFromSuperview() }
     heightConstraint?.constant = t == .keys ? 284 : 330
