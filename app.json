@@ -5,11 +5,109 @@
         "backgroundColor": "#FFF6E9",
         "foregroundImage": "./assets/icon.png"
       },
-      "package": "app.everytool.ios"
+      "package": "app.everytool.ios",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO"
+      ]
     },
     "extra": {
       "eas": {
-        "projectId": "REPLACE_WITH_EVERYTOOL_EAS_PROJECT_ID"
+        "build": {
+          "experimental": {
+            "ios": {
+              "appExtensions": [
+                {
+                  "bundleIdentifier": "app.everytool.ios.share",
+                  "targetName": "EverytoolShare",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.app.everytool.ios"
+                    ]
+                  }
+                },
+                {
+                  "bundleIdentifier": "app.everytool.ios.keyboard",
+                  "targetName": "EverytoolKeyboard",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.app.everytool.ios"
+                    ]
+                  }
+                },
+                {
+                  "bundleIdentifier": "app.everytool.ios.widget",
+                  "targetName": "EverytoolControls",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.app.everytool.ios"
+                    ]
+                  }
+                },
+                {
+                  "bundleIdentifier": "app.everytool.ios.broadcastui",
+                  "targetName": "EverytoolBroadcastUI"
+                },
+                {
+                  "bundleIdentifier": "app.everytool.ios.broadcast",
+                  "targetName": "EverytoolBroadcast",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.app.everytool.ios"
+                    ]
+                  }
+                },
+                {
+                  "bundleIdentifier": "app.everytool.ios.share",
+                  "targetName": "EverytoolShare",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.app.everytool.ios"
+                    ]
+                  }
+                },
+                {
+                  "bundleIdentifier": "app.everytool.ios.keyboard",
+                  "targetName": "EverytoolKeyboard",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.app.everytool.ios"
+                    ]
+                  }
+                },
+                {
+                  "bundleIdentifier": "app.everytool.ios.widget",
+                  "targetName": "EverytoolControls",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.app.everytool.ios"
+                    ]
+                  }
+                },
+                {
+                  "bundleIdentifier": "app.everytool.ios.broadcastui",
+                  "targetName": "EverytoolBroadcastUI"
+                },
+                {
+                  "bundleIdentifier": "app.everytool.ios.broadcast",
+                  "targetName": "EverytoolBroadcast",
+                  "entitlements": {
+                    "com.apple.security.application-groups": [
+                      "group.app.everytool.ios"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "projectId": "74d5cac4-d621-4281-af33-4305f1a3eba8"
       }
     },
     "icon": "./assets/icon.png",
@@ -31,6 +129,7 @@
     },
     "name": "Everytool",
     "orientation": "portrait",
+    "owner": "checkpoint2022s-team",
     "plugins": [
       "expo-status-bar",
       "@bacons/apple-targets",
@@ -45,7 +144,7 @@
     "scheme": "everytool",
     "slug": "everytool",
     "updates": {
-      "url": "https://u.expo.dev/REPLACE_WITH_EVERYTOOL_EAS_PROJECT_ID"
+      "url": "https://u.expo.dev/74d5cac4-d621-4281-af33-4305f1a3eba8"
     },
     "userInterfaceStyle": "automatic",
     "version": "1.0.0",
