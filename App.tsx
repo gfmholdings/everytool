@@ -42,19 +42,31 @@ interface Pending {
   stitchShots?: ShotInput[];
   text?: string;
   autoRecord?: boolean;
+  finishSession?: boolean;
   /** Changes on every "record" request so a mounted screen reacts too. */
   recordNonce?: number;
 }
 
 /** Tool ids arriving from controls / links: "<tool>" or "stitch:record". */
-function parseToolRef(ref: string | null | undefined): { id: ToolId; record: boolean } | null {
+function parseToolRef(
+  ref: string | null | undefined,
+): { id: ToolId; record: boolean; session: boolean } | null {
   if (!ref) return null;
   const clean = ref.replace(/^\/+|\/+$/g, '');
   if (clean === 'record' || clean === 'stitch:record' || clean === 'stitch/record') {
-    return { id: 'stitch', record: true };
+    return { id: 'stitch', record: true, session: false };
+  }
+  if (clean === 'session' || clean === 'stitch:session' || clean === 'stitch/session') {
+    return { id: 'stitch', record: false, session: true };
   }
   const id = clean as ToolId;
-  return TOOLS.some((t) => t.id === id) ? { id, record: false } : null;
+  return TOOLS.some((t) => t.id === id) ? { id, record: false, session: false } : null;
+}
+
+function requestFor(target: { record: boolean; session: boolean }) {
+  if (target.record) return { autoRecord: true };
+  if (target.session) return { finishSession: true };
+  return undefined;
 }
 
 function Root() {
@@ -164,10 +176,11 @@ function Root() {
       else if (path.startsWith('tool/')) ref = path.slice('tool/'.length);
       else if (parsed.hostname === 'stitch' || path === 'stitch') ref = 'stitch';
       else if (parsed.hostname === 'record' || path === 'record') ref = 'record';
+      else if (parsed.hostname === 'session' || path === 'session') ref = 'session';
       void drainAndRoute().then((routed) => {
         if (routed) return;
         const target = parseToolRef(ref);
-        if (target) openTool(target.id, target.record ? { autoRecord: true } : undefined);
+        if (target) openTool(target.id, requestFor(target));
       });
     };
     const sub = Linking.addEventListener('url', ({ url }) => handle(url));
@@ -185,7 +198,7 @@ function Root() {
     const timers: ReturnType<typeof setTimeout>[] = [];
     const check = () => {
       const target = parseToolRef(takePendingTool());
-      if (target) openTool(target.id, target.record ? { autoRecord: true } : undefined);
+      if (target) openTool(target.id, requestFor(target));
     };
     const onActive = () => {
       check();
@@ -226,6 +239,7 @@ function Root() {
           onBack={back}
           initialShots={pending?.stitchShots}
           recordRequest={pending?.autoRecord ? pending.recordNonce : undefined}
+          sessionRequest={pending?.finishSession ? pending.recordNonce : undefined}
           notify={notify}
         />
       );
@@ -314,8 +328,10 @@ function Root() {
               then hold the globe key.
             </Text>
             <Text style={[type.body, styles.spaced]}>
-              Every tool — plus Record Long Screenshot — can go in Control
-              Center: swipe down, tap +, Add a Control, search “Everytool”.
+              Every tool can go in Control Center — plus Start Long
+              Screenshot and Stitch Screenshots, so you can capture a long
+              page from any app: swipe down, tap +, Add a Control, search
+              “Everytool”.
             </Text>
           </View>
         </ScrollView>

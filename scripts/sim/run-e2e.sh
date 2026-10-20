@@ -61,6 +61,16 @@ run_flow "Long screenshot: 3 screenshots → stitch, save, share" 10_stitch_phot
 "$INJECT" broadcast "$FX/frames"
 run_flow "Long screenshot: finished recording auto-opens + stitches, save, copy" 11_stitch_recording.yaml
 
+# Screenshot session: Start in the app, then screenshots arrive in Photos
+# one by one (as if taken while scrolling), then Stitch.
+run_flow "Screenshot session: start" 12a_session_start.yaml
+for f in "$FX"/session/shot-1.png "$FX"/session/shot-2.png "$FX"/session/shot-3.png; do
+  xcrun simctl addmedia "$UDID" "$f"; sleep 1.5
+done
+# Simulator imports may not carry the Screenshot subtype on every iOS
+# release, so this half reports without failing the run.
+run_flow "Screenshot session: stitch + save + delete sources" 12b_session_finish.yaml 0
+
 run_flow "Keyboard: enable + clipboard tab" 20_keyboard.yaml 0
 
 {

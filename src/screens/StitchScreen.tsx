@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AppState as RNAppState,
   FlatList,
+  Linking,
   Image,
   Modal,
   Pressable,
@@ -17,6 +18,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Card, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
 import { formatBytes, saveToPhotos, shareFile } from '../lib/files';
 import { clearBroadcastInbox, readBroadcastInbox, type BroadcastInbox } from '../lib/incoming';
+import {
+  countSessionShots,
+  deleteSessionShots,
+  endSession,
+  ensurePhotoAccess,
+  sessionShots,
+  sessionStart,
+  startSession,
+  type PhotoAccess,
+} from '../lib/screenshotSession';
 import {
   COPY_MAX_HEIGHT,
   stitchFrames,
@@ -32,7 +43,7 @@ import {
 } from '../store/sharedVault';
 import { colors, type } from '../theme';
 
-type Mode = 'record' | 'photos';
+type Mode = 'session' | 'record' | 'photos';
 
 const PHASE_LABEL: Record<StitchPhase, string> = {
   preparing: 'Preparing frames',
@@ -42,7 +53,12 @@ const PHASE_LABEL: Record<StitchPhase, string> = {
 };
 
 /**
- * Long screenshot. Primary flow, all native iOS surfaces:
+ * Long screenshot. Three ways in:
+ *  - Screenshots (default): Start a session (here or the "Start Long
+ *    Screenshot" control), take ordinary screenshots while scrolling in
+ *    any app, then Stitch (here or the "Stitch Screenshots" control).
+ *    Everytool joins every screenshot taken since Start.
+ *  - Record:
  *   Record (here, or the "Record Long Screenshot" control) → Apple's
  *   broadcast sheet with Everytool preselected → scroll as long as you
  *   like → stop → Everytool stitches automatically → Save / Share / Copy.
@@ -52,15 +68,22 @@ export function StitchScreen({
   onBack,
   initialShots,
   recordRequest,
+  sessionRequest,
   notify,
 }: {
   onBack: () => void;
   initialShots?: ShotInput[];
   /** A new value asks the screen to raise the recorder (from a control). */
   recordRequest?: number;
+  /** A new value asks the screen to stitch the session (from a control). */
+  sessionRequest?: number;
   notify: (msg: string) => void;
 }) {
-  const [mode, setMode] = useState<Mode>(initialShots?.length ? 'photos' : 'record');
+  const [mode, setMode] = useState<Mode>(initialShots?.length ? 'photos' : 'session');
+  const [sessionAt, setSessionAt] = useState<number | null>(() => sessionStart());
+  const [sessionCount, setSessionCount] = useState(0);
+  const [photoAccess, setPhotoAccess] = useState<PhotoAccess | null>(null);
+  const [sessionAssets, setSessionAssets] = useState<string[]>([]);
   const [shots, setShots] = useState<ShotInput[]>(initialShots ?? []);
   const [result, setResult] = useState<StitchResult | null>(null);
   const [resultFrom, setResultFrom] = useState<Mode | null>(null);
@@ -79,14 +102,17 @@ export function StitchScreen({
   }, []);
 
   const run = useCallback(
-    async (inputs: ShotInput[], from: Mode) => {
-      if (busyRef.current) return;
+    async (inputs: ShotInput[], from: Mode): Promise<StitchResult | null> => {
+      if (busyRef.current) return null;
       busyRef.current = true;
       setBusy(true);
       setError(null);
       setResult(null);
       try {
-        const out = await stitchFrames(inputs, { mode: from, onProgress });
+        const out = await stitchFrames(inputs, {
+          mode: from === 'record' ? 'record' : 'photos',
+          onProgress,
+        });
         setResult(out);
         setResultFrom(from);
         if (out.stackedSeams > 0) {
@@ -94,8 +120,10 @@ export function StitchScreen({
             `Stitched — ${out.stackedSeams} spot${out.stackedSeams === 1 ? '' : 's'} didn’t overlap and ${out.stackedSeams === 1 ? 'was' : 'were'} stacked.`,
           );
         }
+        return out;
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Stitching failed.');
+        return null;
       } finally {
         busyRef.current = false;
         setBusy(false);
@@ -108,6 +136,15 @@ export function StitchScreen({
   // Watch the broadcast inbox while this screen is open: show live
   // progress during a recording and stitch the moment it stops.
   const poll = useCallback(async () => {
+    const started = sessionStart();
+    setSessionAt(started);
+    if (started) {
+      try {
+        setSessionCount(await countSessionShots(started));
+      } catch {
+        // no Photos access yet
+      }
+    }
     const next = await readBroadcastInbox();
     setInbox(next);
     const key = next.frames.length > 0 ? `${next.frames[0]!.uri}#${next.frames.length}` : null;
@@ -168,6 +205,95 @@ export function StitchScreen({
     }
     return undefined;
   }, [recordRequest, startRecording]);
+
+  // ---- Screenshot session ------------------------------------------------
+
+  const beginSession = async () => {
+    setError(null);
+    const access = await ensurePhotoAccess();
+    setPhotoAccess(access);
+    if (access === 'denied') {
+      setError('Everytool needs Photos access to find your screenshots.');
+      return;
+    }
+    if (access === 'limited') {
+      setError(
+        'Photos access is “Limited”, so new screenshots stay hidden from Everytool. Choose Full Access in Settings → Everytool → Photos.',
+      );
+      return;
+    }
+    const now = Date.now();
+    startSession(now);
+    setSessionAt(now);
+    setSessionCount(0);
+    setResult(null);
+    notify('Session started — take screenshots as you scroll');
+  };
+
+  const finishSession = useCallback(async () => {
+    const started = sessionStart();
+    if (!started) {
+      setError('No session running. Tap Start, then take screenshots as you scroll.');
+      return;
+    }
+    setMode('session');
+    setError(null);
+    const access = await ensurePhotoAccess();
+    setPhotoAccess(access);
+    if (access !== 'all') {
+      setError('Everytool needs Full Access to Photos to find your screenshots.');
+      return;
+    }
+    setProgress('Finding your screenshots…');
+    let shotsTaken: Awaited<ReturnType<typeof sessionShots>> = [];
+    try {
+      shotsTaken = await sessionShots(started);
+    } catch {
+      setProgress(null);
+      setError('Couldn’t read your screenshots from Photos.');
+      return;
+    }
+    setProgress(null);
+    if (shotsTaken.length < 2) {
+      setError(
+        shotsTaken.length === 1
+          ? 'Only 1 screenshot so far — scroll a little and take at least one more.'
+          : 'No screenshots yet. Take a screenshot, scroll down a bit, take another — then Stitch.',
+      );
+      return;
+    }
+    const out = await run(shotsTaken, 'session');
+    if (out) {
+      endSession();
+      setSessionAt(null);
+      setSessionAssets(shotsTaken.map((x) => x.assetId));
+    }
+  }, [run]);
+
+  const cancelSession = () => {
+    endSession();
+    setSessionAt(null);
+    setSessionCount(0);
+    notify('Session cancelled');
+  };
+
+  const deleteSources = async () => {
+    const ok = await deleteSessionShots(sessionAssets);
+    if (ok) {
+      notify(`Deleted ${sessionAssets.length} screenshots`);
+      setSessionAssets([]);
+    }
+  };
+
+  const handledSession = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (sessionRequest && handledSession.current !== sessionRequest) {
+      handledSession.current = sessionRequest;
+      const t = setTimeout(() => void finishSession(), 300);
+      return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [sessionRequest, finishSession]);
 
   const pickShots = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -234,12 +360,72 @@ export function StitchScreen({
     <ToolShell title="Long screenshot" onBack={onBack}>
       <Segmented
         options={[
-          { id: 'record', label: 'Record & scroll' },
-          { id: 'photos', label: 'From photos' },
+          { id: 'session', label: 'Screenshots' },
+          { id: 'record', label: 'Record' },
+          { id: 'photos', label: 'Pick photos' },
         ]}
         value={mode}
         onChange={setMode}
       />
+
+      {mode === 'session' && (
+        <>
+          <Card>
+            <Text style={type.h2}>Screenshot as you scroll</Text>
+            <Text style={[type.body, styles.spaced]}>
+              1. Tap Start.{'\n'}
+              2. In any app, take a screenshot (side button + volume up),
+              scroll down a little, take another — as many as you like.
+              Keep a bit of overlap between them.{'\n'}
+              3. Come back and tap Stitch. Everytool joins every screenshot
+              taken since Start into one long image.
+            </Text>
+            <Text style={[type.small, styles.spaced]}>
+              Tip: Settings → Accessibility → Touch → Back Tap → Double Tap →
+              Screenshot lets you capture with a tap on the back of the
+              phone. You can also add “Start Long Screenshot” and “Stitch
+              Screenshots” to Control Center.
+            </Text>
+          </Card>
+          {sessionAt ? (
+            <Card>
+              <Text style={type.body}>
+                Session running — {sessionCount} screenshot
+                {sessionCount === 1 ? '' : 's'} so far.
+              </Text>
+              <Text style={[type.small, styles.spaced]}>
+                Started{' '}
+                {new Date(sessionAt).toLocaleTimeString(undefined, {
+                  hour: 'numeric',
+                  minute: '2-digit',
+                })}
+                . Leave Everytool and keep capturing, or stitch now.
+              </Text>
+              <View style={styles.rowGap}>
+                <PrimaryButton
+                  label={busy ? 'Stitching…' : `Stitch ${sessionCount >= 2 ? `${sessionCount} screenshots` : 'screenshots'}`}
+                  onPress={() => void finishSession()}
+                  disabled={busy}
+                  orange
+                  testID="stitch.session.finish"
+                />
+                <GhostButton label="Cancel session" onPress={cancelSession} />
+              </View>
+            </Card>
+          ) : (
+            <PrimaryButton
+              label="Start"
+              onPress={() => void beginSession()}
+              disabled={busy}
+              orange
+              testID="stitch.session.start"
+            />
+          )}
+          {photoAccess === 'limited' && (
+            <GhostButton label="Open Settings" onPress={() => void Linking.openSettings()} />
+          )}
+        </>
+      )}
 
       {mode === 'record' && (
         <>
@@ -374,6 +560,12 @@ export function StitchScreen({
           />
           {result.height <= COPY_MAX_HEIGHT && (
             <GhostButton label="Copy image" onPress={() => void copyImage()} />
+          )}
+          {resultFrom === 'session' && sessionAssets.length > 0 && (
+            <GhostButton
+              label={`Delete the ${sessionAssets.length} screenshots from Photos`}
+              onPress={() => void deleteSources()}
+            />
           )}
           <FullLengthViewer result={result} visible={viewer} onClose={() => setViewer(false)} />
         </>

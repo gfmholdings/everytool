@@ -222,8 +222,9 @@ export function PdfScreen({
           </Text>
           {mode === 'compress' && beforeBytes > 0 && (
             <Text style={type.small}>
-              Was {formatBytes(beforeBytes)} — saved{' '}
-              {formatBytes(Math.max(0, beforeBytes - result.bytes))}
+              {result.shrunk === false
+                ? 'Already as small as Everytool can make it — PDFs made of photos don’t shrink with this method.'
+                : `Was ${formatBytes(beforeBytes)} — saved ${formatBytes(Math.max(0, beforeBytes - result.bytes))}`}
             </Text>
           )}
           <PrimaryButton

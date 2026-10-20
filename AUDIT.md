@@ -98,3 +98,53 @@ Not automatable on a simulator:
 - The GIF video picker.
 
 These paths are covered up to the boundary (inbox, routes, decode) and need one manual pass on a device.
+
+## Added after the audit: screenshot sessions
+
+iOS doesn't let a third-party app capture other apps' screens, float a
+"hold" control over them, or follow the user's swipes. So the Android-style
+"hold the first screenshot and drag to the next page" can't exist on iPhone.
+The closest equivalent is now the default mode of Long screenshot:
+
+- **Start:** tap Start in the app, or the **Start Long Screenshot** control,
+  which records the start time without leaving the current app.
+- **Capture:** take normal screenshots while scrolling. Back Tap → Screenshot
+  makes this a tap on the back of the phone.
+- **Stitch:** tap Stitch in the app, or the **Stitch Screenshots** control,
+  which opens the app and stitches straight away.
+- **Which screenshots:** Everytool finds every screenshot taken since Start
+  through PhotoKit (subtype `screenshot`, portrait, the dominant screen
+  size, in the order taken). It stitches them with the same engine, with
+  no length limit. Save, Share and Copy work as before, plus **Delete the N
+  screenshots from Photos**, which iOS confirms.
+- **Photos access:** needs Full Access, because new screenshots are hidden
+  from "Limited" access. The screen explains this and links to Settings.
+- **Tests:** `src/lib/sessionPick.ts` is unit-tested in `tests/session.test.ts`.
+  Simulator flows `12a`/`12b` add tagged screenshots between Start and Stitch.
+
+## PDF pass (tests + compress fix)
+
+PDF logic now lives in `src/lib/pdfCore.ts`, which works on bytes only and
+has no file system code; `src/lib/pdf.ts` only does the file I/O. Tested in
+`tests/pdf.test.ts` against real PDFs built by pdf-lib.
+
+- **Merge:** PDFs and photos stay in list order, with one page per photo,
+  sized to that photo. PNG photos now work too (before: JPEG only). Empty
+  lists and non-images are rejected with a message.
+- **Split:** the requested pages come out in the order asked;
+  out-of-range pages are ignored.
+- **Compress:** measured on three kinds of PDF.
+
+  | PDF kind | Original compress | Now |
+  |---|---|---|
+  | Structure-heavy | about 50% smaller | unchanged |
+  | Photo-heavy | 0.4% smaller (the UI already says so) | unchanged |
+  | Carrying leftover, unused objects from earlier edits | 0.7% smaller | 80%+ smaller |
+
+  - **Bug fixed:** the leftover objects were kept. Compress now drops them,
+    but only when the PDF has no bookmarks, form fields or named links. If
+    it has any of those, it does a plain re-save, so they survive (tested
+    with a filled form field).
+  - **Bug fixed:** compress could return a file *bigger* than the original.
+    It now never does; the screen says "Already as small as Everytool can
+    make it" instead.

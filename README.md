@@ -12,7 +12,7 @@ team `8H56KM6SCW`, scheme `everytool`.
 
 | Tool | What it does |
 | --- | --- |
-| Long screenshot | Tap Record (or the Record Long Screenshot control), scroll as long as you like, stop — Everytool stitches automatically. Also from picked overlapping screenshots. ≤1170px wide, **no height limit** (rows stream into a compressed PNG); fixed bars appear once; seams with no overlap are reported. Save to Photos, Share, Copy. |
+| Long screenshot | **Screenshots mode:** tap Start (or the Start Long Screenshot control), take ordinary screenshots while scrolling in any app, tap Stitch — every screenshot since Start becomes one image (sources can be deleted after). **Record mode:** tap Record, scroll, stop — stitched automatically. Also from picked overlapping screenshots. ≤1170px wide, **no height limit** (rows stream into a compressed PNG); fixed bars appear once; seams with no overlap are reported. Save to Photos, Share, Copy. |
 | Clipboard | Clipboard vault: save, paste, copy, cut, edit, pin, share, search, delete, clear. Same vault as the keyboard (App Group), edits flow both ways. |
 | Convert | Image → JPG / PNG / PDF; several photos → one PDF. |
 | QR toolbox | Make QR codes (text, Wi-Fi, contact), scan from camera or from a photo, made/scanned history. |
@@ -35,8 +35,10 @@ All under `targets/`; bundle IDs derive from `app.everytool.ios`.
   keys) — and Text tools (counts + extraction over the text
   around the cursor; line transforms capped at 1500 chars). Open Access is
   requested for the pasteboard + App Group only; there is no network code.
-- **controls** (`.widget`, WidgetKit) — eleven iOS 18 Control Center
-  controls: one per tool plus Record Long Screenshot. Each runs
+- **controls** (`.widget`, WidgetKit) — thirteen iOS 18 Control Center
+  controls: one per tool, Record Long Screenshot, Start Long Screenshot
+  (records a session start without leaving the current app —
+  `SessionIntents.swift`) and Stitch Screenshots. Each runs
   `OpenToolIntent` (compiled into the extension AND the app target via
   `plugins/withOpenToolIntent.js`), which records the tool in the App Group;
   the app consumes it on activation (`takePendingTool`).

@@ -85,7 +85,7 @@ jobs:
             build | tee build/xcodebuild.log | grep -E "error:|warning: .*Everytool|BUILD (SUCCEEDED|FAILED)" || true
           grep -q "BUILD SUCCEEDED" build/xcodebuild.log
 
-      - name: Verify bundle (extensions + 11 controls)
+      - name: Verify bundle (extensions + 13 controls)
         run: |
           set -euo pipefail
           APP="build/sim/Build/Products/Release-iphonesimulator/Everytool.app"
@@ -99,6 +99,8 @@ jobs:
           # ("app.everytool.ios.controls.<tool>"); the record control's
           # kind is a literal. Both must be in the binary.
           strings "$BIN" | grep -q "app.everytool.ios.controls.record"
+          strings "$BIN" | grep -q "app.everytool.ios.controls.sessionstart"
+          strings "$BIN" | grep -q "app.everytool.ios.controls.sessionfinish"
           strings "$BIN" | grep -q "app.everytool.ios.controls."
           # Display names are NOT reliable binary strings: a title of 15
           # bytes or fewer is a Swift small string, inlined into code and
@@ -118,7 +120,9 @@ jobs:
             "TextControl|Count, extract and clean up text." \
             "DaysControl|Count days between dates." \
             "SplitControl|Split a bill with tax and tip." \
-            "GifControl|Turn a short video into a GIF."; do
+            "GifControl|Turn a short video into a GIF." \
+            "StartSessionControl|Start a session: take screenshots while you scroll, then tap Stitch Screenshots." \
+            "FinishSessionControl|Join the screenshots you took into one long screenshot."; do
             type_name="${pair%%|*}"; summary="${pair#*|}"
             strings "$BIN" | grep -q "$type_name" || { echo "::error::control type '$type_name' missing"; exit 1; }
             strings "$BIN" | grep -q "$summary" || { echo "::error::control '$type_name' description missing"; exit 1; }

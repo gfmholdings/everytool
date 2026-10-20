@@ -43,6 +43,18 @@ public class EverytoolSharedVaultModule: Module {
       return tool
     }
 
+    /// Small string values shared with the extensions — e.g. the
+    /// screenshot-session start time the "Start Screenshots" control sets.
+    Function("readGroupString") { (groupId: String, key: String) -> String? in
+      UserDefaults(suiteName: groupId)?.string(forKey: key)
+    }
+
+    Function("writeGroupString") { (groupId: String, key: String, value: String?) -> Bool in
+      guard let defaults = UserDefaults(suiteName: groupId) else { return false }
+      if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+      return true
+    }
+
     /// Opens Apple's screen-broadcast sheet with the Everytool broadcast
     /// extension preselected. The user taps Start Broadcast; ReplayKit
     /// hands frames to targets/broadcast. Returns false when no window

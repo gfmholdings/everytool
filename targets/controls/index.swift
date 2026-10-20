@@ -3,7 +3,7 @@ import WidgetKit
 
 /// Every control Everytool offers in Control Center → Add a Control.
 /// WidgetBundleBuilder accepts at most 10 widgets per block, so the
-/// eleven controls are split across two nested bundles.
+/// thirteen controls are split across two nested bundles.
 @main
 struct EverytoolControls: WidgetBundle {
   var body: some Widget {
@@ -14,6 +14,8 @@ struct EverytoolControls: WidgetBundle {
 
 struct EverytoolCaptureControls: WidgetBundle {
   var body: some Widget {
+    StartSessionControl()
+    FinishSessionControl()
     RecordControl()
     StitchControl()
     ClipboardControl()

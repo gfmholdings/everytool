@@ -19,6 +19,8 @@ interface SharedVaultNative {
   writeStateJson(groupId: string, json: string): boolean;
   groupContainerUri(groupId: string): string | null;
   takePendingTool(groupId: string): string | null;
+  readGroupString?(groupId: string, key: string): string | null;
+  writeGroupString?(groupId: string, key: string, value: string | null): boolean;
   showBroadcastPicker?(extensionBundleId: string): Promise<boolean>;
   requestNotificationPermission?(): Promise<boolean>;
 }
@@ -107,5 +109,27 @@ export async function requestNotificationPermission(): Promise<boolean> {
     return await native.requestNotificationPermission();
   } catch {
     return false;
+  }
+}
+
+/**
+ * A small shared string from the App Group. Returns undefined when the
+ * native module is unavailable (callers keep their own fallback).
+ */
+export function readGroupString(key: string): string | null | undefined {
+  if (!native?.readGroupString) return undefined;
+  try {
+    return native.readGroupString(APP_GROUP_ID, key);
+  } catch {
+    return undefined;
+  }
+}
+
+export function writeGroupString(key: string, value: string | null): void {
+  if (!native?.writeGroupString) return;
+  try {
+    native.writeGroupString(APP_GROUP_ID, key, value);
+  } catch {
+    // best effort
   }
 }

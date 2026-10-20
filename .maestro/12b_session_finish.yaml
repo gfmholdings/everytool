@@ -1,0 +1,25 @@
+appId: app.everytool.ios
+name: Screenshot session - stitch the screenshots taken since Start, delete sources
+---
+# The driver added three tagged screenshots to Photos after 12a.
+- extendedWaitUntil:
+    visible: "Session running — 3 screenshots so far.*"
+    timeout: 20000
+- tapOn:
+    id: "stitch.session.finish"
+- extendedWaitUntil:
+    visible: "Your long screenshot"
+    timeout: 180000
+- assertVisible: "1170 × 4332 px.*"
+- takeScreenshot: 12b-session-stitched
+- tapOn: "Save to Photos"
+- extendedWaitUntil:
+    visible: "Saved to Photos"
+    timeout: 20000
+- tapOn: "Delete the 3 screenshots from Photos"
+- tapOn:
+    text: "Delete"
+    optional: true
+- extendedWaitUntil:
+    visible: "Deleted 3 screenshots"
+    timeout: 15000

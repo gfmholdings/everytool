@@ -1,0 +1,15 @@
+appId: app.everytool.ios
+name: Screenshot session - start
+---
+- launchApp
+- tapOn: "Open Long screenshot"
+- tapOn: "Screenshots"
+- tapOn:
+    id: "stitch.session.start"
+- tapOn:
+    text: "Allow Full Access|Allow Access to All Photos"
+    optional: true
+- extendedWaitUntil:
+    visible: "Session running.*"
+    timeout: 15000
+- takeScreenshot: 12a-session-started

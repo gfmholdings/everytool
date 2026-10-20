@@ -1,7 +1,15 @@
 import { File } from 'expo-file-system';
-import { PDFDocument } from 'pdf-lib';
 
 import { tempFileUri } from './files';
+import {
+  compressPdfBytes,
+  extractPdfBytes,
+  mergePdfBytes,
+  pageCountOf,
+  type PdfOutput,
+} from './pdfCore';
+
+// File I/O around the pure, unit-tested PDF operations in pdfCore.ts.
 
 export interface PdfSource {
   id: string;
@@ -23,9 +31,8 @@ export async function pdfSourceFromUri(
   kind: 'pdf' | 'image',
 ): Promise<PdfSource> {
   if (kind === 'pdf') {
-    const bytes = await new File(uri).bytes();
-    const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
-    return { id: nextId(), name, kind, uri, pages: doc.getPageCount() };
+    const pages = await pageCountOf(await new File(uri).bytes());
+    return { id: nextId(), name, kind, uri, pages };
   }
   return { id: nextId(), name, kind, uri, pages: 1 };
 }
@@ -34,67 +41,34 @@ export interface PdfResult {
   uri: string;
   pages: number;
   bytes: number;
+  /** Compress only: false when the file couldn't be made smaller. */
+  shrunk?: boolean;
 }
 
-async function savePdf(doc: PDFDocument): Promise<PdfResult> {
-  const bytes = await doc.save({ useObjectStreams: true });
+function writeResult(out: PdfOutput, shrunk?: boolean): PdfResult {
   const uri = tempFileUri('pdf', 'everytool-pdf');
-  new File(uri).write(bytes);
-  return { uri, pages: doc.getPageCount(), bytes: bytes.length };
+  new File(uri).write(out.bytes);
+  return { uri, pages: out.pages, bytes: out.bytes.length, shrunk };
 }
 
-/** Merge sources in list order. Images become one full-bleed page each. */
+/** Merge sources in list order. Images (JPEG/PNG) become one page each. */
 export async function mergePdfSources(sources: PdfSource[]): Promise<PdfResult> {
-  const out = await PDFDocument.create();
-  for (const source of sources) {
-    if (source.kind === 'pdf') {
-      const bytes = await new File(source.uri).bytes();
-      const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
-      const pages = await out.copyPages(doc, doc.getPageIndices());
-      pages.forEach((p) => out.addPage(p));
-    } else {
-      const bytes = await new File(source.uri).bytes();
-      // Images routed here are JPEG (Convert normalizes to .jpg first).
-      const image = await out.embedJpg(bytes);
-      const page = out.addPage([image.width, image.height]);
-      page.drawImage(image, {
-        x: 0,
-        y: 0,
-        width: image.width,
-        height: image.height,
-      });
-    }
-  }
-  return savePdf(out);
+  const inputs = [];
+  for (const s of sources) inputs.push({ kind: s.kind, bytes: await new File(s.uri).bytes() });
+  return writeResult(await mergePdfBytes(inputs));
 }
 
 /** Extract the given 0-based page indices from a PDF into a new file. */
-export async function extractPdfPages(
-  uri: string,
-  indices: number[],
-): Promise<PdfResult> {
-  const bytes = await new File(uri).bytes();
-  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
-  const out = await PDFDocument.create();
-  const valid = indices.filter((i) => i >= 0 && i < doc.getPageCount());
-  const pages = await out.copyPages(doc, valid);
-  pages.forEach((p) => out.addPage(p));
-  return savePdf(out);
+export async function extractPdfPages(uri: string, indices: number[]): Promise<PdfResult> {
+  return writeResult(await extractPdfBytes(await new File(uri).bytes(), indices));
 }
 
-/**
- * Compress: re-save with object streams. Honest scope (same as the
- * mockup): this shrinks structure overhead, it does not re-encode images
- * inside the PDF.
- */
+/** Object-stream re-save; drops leftovers when safe; never bigger. */
 export async function compressPdf(uri: string): Promise<PdfResult> {
-  const bytes = await new File(uri).bytes();
-  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
-  return savePdf(doc);
+  const out = await compressPdfBytes(await new File(uri).bytes());
+  return writeResult(out, out.shrunk);
 }
 
 export async function pdfPageCount(uri: string): Promise<number> {
-  const bytes = await new File(uri).bytes();
-  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
-  return doc.getPageCount();
+  return pageCountOf(await new File(uri).bytes());
 }

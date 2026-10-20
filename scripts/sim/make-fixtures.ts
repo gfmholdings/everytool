@@ -4,7 +4,7 @@
 //   out/shots/shot-N.png — three overlapping screenshots (stitch from photos)
 //   out/photo.png        — one photo (convert / resize)
 //   out/doc.pdf          — a 3-page PDF (PDF tools)
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { PDFDocument, StandardFonts } from 'pdf-lib';
@@ -59,7 +59,41 @@ function screenRow(scroll: number, clock: number, y: number, buf: Uint8Array) {
   }
 }
 
+/**
+ * Copy of a PNG with the XMP packet iOS writes into real screenshots
+ * (exif:UserComment = "Screenshot"), which is how Photos files an image
+ * under the Screenshots subtype. Inserted as an iTXt chunk after IHDR.
+ */
+function asScreenshot(png: Buffer): Buffer {
+  const xmp =
+    '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">' +
+    '<rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/">' +
+    '<exif:UserComment>Screenshot</exif:UserComment></rdf:Description></rdf:RDF></x:xmpmeta>';
+  const data = Buffer.concat([
+    Buffer.from('XML:com.adobe.xmp', 'latin1'),
+    Buffer.from([0, 0, 0, 0, 0]), // null, compression flag, method, empty lang, empty keyword
+    Buffer.from(xmp, 'utf8'),
+  ]);
+  const type = Buffer.from('iTXt', 'latin1');
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([type, data])) >>> 0);
+  const ihdrEnd = 8 + 4 + 4 + 13 + 4;
+  return Buffer.concat([png.subarray(0, ihdrEnd), len, type, data, crc, png.subarray(ihdrEnd)]);
+}
+
+function crc32(buf: Buffer): number {
+  let c = 0xffffffff;
+  for (const b of buf) {
+    c ^= b;
+    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
 mkdirSync(join(out, 'frames'), { recursive: true });
+mkdirSync(join(out, 'session'), { recursive: true });
 mkdirSync(join(out, 'shots'), { recursive: true });
 
 // A recording: steady scroll with one paused (duplicate) frame.
@@ -71,9 +105,11 @@ const items = scrolls.map((s, i) => {
 });
 writeFileSync(join(out, 'frames', 'index.json'), JSON.stringify({ items, finished: true }));
 
-[0, 900, 1800].forEach((s, i) =>
-  writePng(join(out, 'shots', `shot-${i + 1}.png`), W, H, (y, b) => screenRow(s, i, y, b)),
-);
+[0, 900, 1800].forEach((s, i) => {
+  const path = join(out, 'shots', `shot-${i + 1}.png`);
+  writePng(path, W, H, (y, b) => screenRow(s, i, y, b));
+  writeFileSync(join(out, 'session', `shot-${i + 1}.png`), asScreenshot(readFileSync(path)));
+});
 
 writePng(join(out, 'photo.png'), 2400, 1800, (y, b) => {
   for (let x = 0; x < 2400; x += 1) {

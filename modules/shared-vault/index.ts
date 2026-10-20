@@ -5,6 +5,8 @@ export interface SharedVaultNative {
   writeStateJson(groupId: string, json: string): boolean;
   groupContainerUri(groupId: string): string | null;
   takePendingTool(groupId: string): string | null;
+  readGroupString(groupId: string, key: string): string | null;
+  writeGroupString(groupId: string, key: string, value: string | null): boolean;
   showBroadcastPicker(extensionBundleId: string): Promise<boolean>;
   requestNotificationPermission(): Promise<boolean>;
 }
