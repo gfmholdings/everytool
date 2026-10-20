@@ -100,9 +100,30 @@ jobs:
           # kind is a literal. Both must be in the binary.
           strings "$BIN" | grep -q "app.everytool.ios.controls.record"
           strings "$BIN" | grep -q "app.everytool.ios.controls."
-          for t in "Long Screenshot" "Clipboard" "Convert" "Resize Photo" "PDF Tools" "Text Tools" "Days Counter" "Split Bill" "Video to GIF"; do
-            strings "$BIN" | grep -q "$t" || { echo "::error::control '$t' missing"; exit 1; }
+          # Display names are NOT reliable binary strings: a title of 15
+          # bytes or fewer is a Swift small string, inlined into code and
+          # never stored contiguously ("Resize Photo", "PDF Tools", ...),
+          # while "Clipboard"/"Convert" only matched as substrings of the
+          # type names. Assert on what the binary provably carries: each
+          # control's type name (Swift type metadata) and its description
+          # text (long literals are stored as cstrings).
+          for pair in \
+            "RecordControl|Start a scrolling capture that Everytool stitches into one image." \
+            "StitchControl|Open Everytool's long screenshot stitcher." \
+            "ClipboardControl|Open your saved clipboard items." \
+            "ConvertControl|Open Everytool's file converter." \
+            "QrControl|Make or scan a QR code." \
+            "ResizeControl|Shrink a photo to a smaller size." \
+            "PdfControl|Merge, split or compress PDFs." \
+            "TextControl|Count, extract and clean up text." \
+            "DaysControl|Count days between dates." \
+            "SplitControl|Split a bill with tax and tip." \
+            "GifControl|Turn a short video into a GIF."; do
+            type_name="${pair%%|*}"; summary="${pair#*|}"
+            strings "$BIN" | grep -q "$type_name" || { echo "::error::control type '$type_name' missing"; exit 1; }
+            strings "$BIN" | grep -q "$summary" || { echo "::error::control '$type_name' description missing"; exit 1; }
           done
+          strings "$BIN" | grep -q "Record Long Screenshot"
           echo "All Control Center controls present."
 
       - name: Install app, grant photo access, add media
