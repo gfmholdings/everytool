@@ -6,8 +6,9 @@ name: Screenshot session - start
 # launchApp only foregrounds, and the broadcast inbox is cleared only
 # when that screen unmounts, so without this the app never reaches
 # Home (proven in runs 39365940718 + 39367801274: the home wait
-# burned its full 30s). Go Back first if a tool is open; the step is
-# optional because at Home there is no "Back".
+# burned its full 30s; the Back tap fixed it in 39370026286). Go Back
+# first if a tool is open; the step is optional because at Home there
+# is no "Back".
 - tapOn:
     text: "Back"
     optional: true
@@ -17,12 +18,36 @@ name: Screenshot session - start
     timeout: 30000
 - tapOn: "Open Long screenshot"
 - tapOn: "Screenshots"
+# The Start button sits below the long intro card; scroll it into
+# view before tapping (no-op when already visible).
+- scrollUntilVisible:
+    element:
+      id: "stitch.session.start"
+    direction: DOWN
+    timeout: 15000
 - tapOn:
     id: "stitch.session.start"
-- tapOn:
-    text: "Allow Full Access|Allow Access to All Photos"
-    optional: true
+# Run 39370026286 got this far and "Session running" never appeared.
+# beginSession first awaits MediaLibrary.requestPermissionsAsync —
+# if the sim's Photos grant did not stick, iOS presents the access
+# prompt and the request stays pending until it is answered. The old
+# single optional tap fired immediately after the Start tap, before
+# the prompt rendered, so it could never hit it. Answer the prompt
+# conditionally, twice (it can take a few seconds to appear on a
+# loaded runner), then wait for the session card.
+- waitForAnimationToEnd
+- runFlow:
+    when:
+      visible: "Allow Full Access|Allow Access to All Photos"
+    commands:
+      - tapOn: "Allow Full Access|Allow Access to All Photos"
+- waitForAnimationToEnd
+- runFlow:
+    when:
+      visible: "Allow Full Access|Allow Access to All Photos"
+    commands:
+      - tapOn: "Allow Full Access|Allow Access to All Photos"
 - extendedWaitUntil:
     visible: "Session running.*"
-    timeout: 15000
+    timeout: 20000
 - takeScreenshot: 12a-session-started

@@ -22,20 +22,29 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
     id: "clipboard.edit"
 - eraseText: 40
 - inputText: "Maestro clip edited"
-# No hideKeyboard: it fails on this screen. Run 39367801274 anchored
-# the tap to "^Save$" and it STILL never updated — and that run's
-# vault file proves updateClip never ran (the clip stayed
-# "Maestro clip one"), so the tap itself missed: the edit card sits
-# low in the list and its Save row stays under the keyboard (the
-# compose Save text works because it sits at the top of the screen).
-# Scroll the Save row up above the keyboard before tapping.
+# No hideKeyboard: it fails on this screen. Three runs (39365940718,
+# 39367801274, 39370026286) all died at the "Clip updated" wait and
+# every run's vault file proves updateClip never ran (the clip stayed
+# "Maestro clip one") — the anchored tap is dispatched but eaten.
+# Geometry from the styles: header ~115 + draft field (multiline,
+# minHeight 140) + button row ~50 + edit card (field 140 + row) puts
+# the edit Save button's center at ~y542 on the 874pt screen — right
+# at the software keyboard's top edge (~538), so a center tap lands
+# on the keyboard, not the button. The content is shorter than the
+# viewport, so scrolling cannot lift it (scrollUntilVisible is kept
+# only as a settle step). Tap the button's TOP edge instead: ~y522
+# is on the button and above the keyboard under either keyboard
+# height. (updateClip itself is sound: same commit path as addClip,
+# which lands in the vault every run.)
 - scrollUntilVisible:
     element:
       text: "^Save$"
     direction: DOWN
     timeout: 20000
 - waitForAnimationToEnd
-- tapOn: "^Save$"
+- tapOn:
+    text: "^Save$"
+    point: "50%, 10%"
 - extendedWaitUntil:
     visible: "Clip updated"
     timeout: 20000
