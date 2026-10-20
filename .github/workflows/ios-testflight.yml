@@ -166,6 +166,30 @@ jobs:
           echo "IPA_PATH=$IPA_PATH" >> "$GITHUB_ENV"
           echo "Exported IPA: $IPA_PATH"
 
+      - name: Verify .ipa build number
+        run: |
+          set -euo pipefail
+          # Guard: app + every extension must carry THIS run's number.
+          # Run 39346864590 shipped app=1 / extensions=9 and App Store
+          # Connect rejected the upload as a duplicate version — under a
+          # green checkmark. Fail here instead, before any upload.
+          unzip -p "$IPA_PATH" 'Payload/*.app/Info.plist' > "$RUNNER_TEMP/app-Info.plist"
+          APP_VER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$RUNNER_TEMP/app-Info.plist")"
+          echo "App CFBundleVersion in .ipa: $APP_VER (expected ${{ github.run_number }})"
+          if [ "$APP_VER" != "${{ github.run_number }}" ]; then
+            echo "::error::App CFBundleVersion $APP_VER != run number ${{ github.run_number }} — App Store Connect would reject this as a duplicate version."
+            exit 1
+          fi
+          for appex in $(unzip -Z1 "$IPA_PATH" | grep -E 'Payload/[^/]+\.app/PlugIns/[^/]+\.appex/Info\.plist$' || true); do
+            unzip -p "$IPA_PATH" "$appex" > "$RUNNER_TEMP/appex-Info.plist"
+            V="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$RUNNER_TEMP/appex-Info.plist")"
+            echo "$appex CFBundleVersion: $V"
+            if [ "$V" != "${{ github.run_number }}" ]; then
+              echo "::error::Extension $appex CFBundleVersion $V != run number ${{ github.run_number }} (ITMS-90473)"
+              exit 1
+            fi
+          done
+
       - name: Upload .ipa artifact
         uses: actions/upload-artifact@v4
         with:
@@ -193,7 +217,14 @@ jobs:
             --type ios \
             --file "$IPA_PATH" \
             --apiKey "$ASC_KEY_ID" \
-            --apiIssuer "$ASC_ISSUER_ID"
+            --apiIssuer "$ASC_ISSUER_ID" 2>&1 | tee "$RUNNER_TEMP/altool.log"
+          # altool can exit 0 even when App Store Connect rejects the
+          # upload (run 39346864590: HTTP 409 duplicate CFBundleVersion
+          # under a green step). Its output text is the only verdict.
+          if ! grep -q "UPLOAD SUCCEEDED" "$RUNNER_TEMP/altool.log"; then
+            echo "::error::altool did not report UPLOAD SUCCEEDED — treating this upload as FAILED (see its output above)."
+            exit 1
+          fi
 
       - name: Upload build logs (on failure)
         if: failure()

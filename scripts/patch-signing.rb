@@ -51,5 +51,31 @@ end
 missing = PROFILES.keys - found
 abort "ERROR: targets not found in project: #{missing.join(', ')}" unless missing.empty?
 
+# The app target is the odd one out: Expo prebuild bakes CFBundleVersion
+# into its Info.plist as a LITERAL string (from ios.buildNumber, default
+# "1"), so the CURRENT_PROJECT_VERSION build setting patched above —
+# which the extensions follow via $(CURRENT_PROJECT_VERSION) in their
+# generated plists — never reaches it. Run 39346864590 shipped app=1,
+# extensions=9 and App Store Connect rejected the upload as a duplicate
+# version. Rewrite the literal so app + extensions share the run number.
+app_target = project.targets.find do |t|
+  t.product_type == 'com.apple.product-type.application'
+end
+abort 'ERROR: no application target found in project' unless app_target
+plist_rel = app_target.build_configurations.first
+                        .build_settings['INFOPLIST_FILE']
+if plist_rel.nil? || plist_rel.empty?
+  abort 'ERROR: app target has no INFOPLIST_FILE build setting'
+end
+plist_path = File.join(File.dirname(project_path), plist_rel)
+abort "ERROR: app Info.plist not found at #{plist_path}" unless File.exist?(plist_path)
+plist = File.read(plist_path)
+matched = plist.sub!(
+  /(<key>CFBundleVersion<\/key>\s*<string>)[^<]*(<\/string>)/
+) { "#{Regexp.last_match(1)}#{BUILD_NUMBER}#{Regexp.last_match(2)}" }
+abort "ERROR: no CFBundleVersion entry found in #{plist_path}" unless matched
+File.write(plist_path, plist)
+puts "Patched #{plist_rel} CFBundleVersion -> #{BUILD_NUMBER}"
+
 project.save
 puts 'Signing patch applied.'
