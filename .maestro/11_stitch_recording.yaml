@@ -53,8 +53,15 @@ name: Long screenshot from a finished screen recording (auto-open + auto-stitch)
     end: 85%, 48%
     duration: 600
 - tapOn: "Apply"
+# The "Hid N area" confirmation is an app-level toast, which renders
+# UNDER the viewer's Modal window — it can never become visible from
+# inside the viewer (run 39377689237 timed out on exactly that wait).
+# Prove Apply completed by the toolbar instead: while hiding, the
+# toolbar shows Cancel/Apply; "Hide details" only returns after a
+# successful Apply exits hiding mode — the no-rect path notifies and
+# stays in hiding mode, so this wait still catches a lost swipe.
 - extendedWaitUntil:
-    visible: "Hid 1 area"
+    visible: "Hide details"
     timeout: 60000
 - takeScreenshot: 11-stitch-hidden
 - tapOn: "Close"

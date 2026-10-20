@@ -34,6 +34,18 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
 - tapOn:
     id: "clipboard.shortcut"
 - inputText: "mcl"
+# The snippet block grew the edit card: with the shortcut field and
+# its hint, the Save button now sits at ~y627 — the whole button is
+# BEHIND the software keyboard (top edge ~538), so the top-edge tap
+# below lands on the keyboard and Save never fires (run 39377689237:
+# "Clip updated" never appeared, vault kept the unedited clip). The
+# keyboard must be dismissed first. No hideKeyboard (it fails on this
+# screen): an unhandled tap on the plain "Snippet word (optional)"
+# label — in the same ScrollView, right above the focused field, so
+# always on screen while editing — resigns the input, the same
+# mechanism as the "Nothing saved yet" dismissal above.
+- tapOn: "Snippet word (optional)"
+- waitForAnimationToEnd
 # No hideKeyboard: it fails on this screen. Three runs (39365940718,
 # 39367801274, 39370026286) all died at the "Clip updated" wait and
 # every run's vault file proves updateClip never ran (the clip stayed

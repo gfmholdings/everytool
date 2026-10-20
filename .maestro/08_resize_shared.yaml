@@ -13,10 +13,24 @@ name: Resize - shared photo is measured and shrunk
 # (39363490145, 39367801274 — the 60s result wait burned fully on a
 # heavily loaded runner) while landing cleanly in others; re-tap if
 # the UI doesn't change.
+# The feature-pass screen is taller (preview card + preset chips +
+# width chips + quality): the Resize button sits below the fold and
+# the result card renders under it, so BOTH need an explicit scroll —
+# run 39377689237 died at the 1080 wait with the resize itself fine.
+- scrollUntilVisible:
+    element:
+      text: "^Resize$"
+    direction: DOWN
+    timeout: 20000
 - waitForAnimationToEnd
 - tapOn:
     text: "^Resize$"
     retryTapIfNoChange: true
+- scrollUntilVisible:
+    element:
+      text: "1080 × 810.*"
+    direction: DOWN
+    timeout: 20000
 - extendedWaitUntil:
     visible: "1080 × 810.*"
     timeout: 60000
@@ -28,12 +42,29 @@ name: Resize - shared photo is measured and shrunk
 # so this 2400x1800 fixture becomes 1600x1200. Same anchored,
 # retrying Resize tap as above (bare "Resize" also matches the
 # "Resize photo" header), and the runner-proven 60s result wait.
+# Selecting a preset clears the previous result and scrolls the
+# layout back up; scroll to the button and result like the baseline.
+- scrollUntilVisible:
+    element:
+      text: "WhatsApp"
+    direction: UP
+    timeout: 20000
 - tapOn: "WhatsApp"
 - assertVisible: "WhatsApp: matches what chat apps keep"
 - waitForAnimationToEnd
+- scrollUntilVisible:
+    element:
+      text: "^Resize$"
+    direction: DOWN
+    timeout: 20000
 - tapOn:
     text: "^Resize$"
     retryTapIfNoChange: true
+- scrollUntilVisible:
+    element:
+      text: "1600 × 1200.*"
+    direction: DOWN
+    timeout: 20000
 - extendedWaitUntil:
     visible: "1600 × 1200.*"
     timeout: 60000
