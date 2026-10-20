@@ -22,13 +22,19 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
     id: "clipboard.edit"
 - eraseText: 40
 - inputText: "Maestro clip edited"
-# No hideKeyboard: it fails on this screen. The Save button sits
-# directly under the edit field, which iOS auto-scrolls above the
-# keyboard when the field is focused — tap Save directly. Anchored:
-# bare "Save" also matches the compose button "Save text" earlier in
-# the hierarchy, and run 39365940718 died here on exactly that — the
-# tap went to the (disabled) compose button and "Clip updated" never
-# appeared.
+# No hideKeyboard: it fails on this screen. Run 39367801274 anchored
+# the tap to "^Save$" and it STILL never updated — and that run's
+# vault file proves updateClip never ran (the clip stayed
+# "Maestro clip one"), so the tap itself missed: the edit card sits
+# low in the list and its Save row stays under the keyboard (the
+# compose Save text works because it sits at the top of the screen).
+# Scroll the Save row up above the keyboard before tapping.
+- scrollUntilVisible:
+    element:
+      text: "^Save$"
+    direction: DOWN
+    timeout: 20000
+- waitForAnimationToEnd
 - tapOn: "^Save$"
 - extendedWaitUntil:
     visible: "Clip updated"

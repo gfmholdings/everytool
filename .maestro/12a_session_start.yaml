@@ -2,9 +2,16 @@ appId: app.everytool.ios
 name: Screenshot session - start
 ---
 - launchApp
-# Wait for the home grid like 01_home does: a bare tapOn right after
-# launchApp timed out in run 39365940718 (slow start after the
-# recording-stitch flow) even though the label exists.
+# Flow 11 leaves the app ON the stitch screen holding its result —
+# launchApp only foregrounds, and the broadcast inbox is cleared only
+# when that screen unmounts, so without this the app never reaches
+# Home (proven in runs 39365940718 + 39367801274: the home wait
+# burned its full 30s). Go Back first if a tool is open; the step is
+# optional because at Home there is no "Back".
+- tapOn:
+    text: "Back"
+    optional: true
+# Wait for the home grid like 01_home does before tapping.
 - extendedWaitUntil:
     visible: "Open Long screenshot"
     timeout: 30000

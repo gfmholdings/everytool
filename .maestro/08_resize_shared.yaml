@@ -9,7 +9,14 @@ name: Resize - shared photo is measured and shrunk
     visible: "2400 × 1800.*"
     timeout: 20000
 # Anchored: bare "Resize" also matches the "Resize photo" header title.
-- tapOn: "^Resize$"
+# retryTapIfNoChange: the tap was swallowed outright in two runs
+# (39363490145, 39367801274 — the 60s result wait burned fully on a
+# heavily loaded runner) while landing cleanly in others; re-tap if
+# the UI doesn't change.
+- waitForAnimationToEnd
+- tapOn:
+    text: "^Resize$"
+    retryTapIfNoChange: true
 - extendedWaitUntil:
     visible: "1080 × 810.*"
     timeout: 60000
