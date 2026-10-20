@@ -6,7 +6,12 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
 - tapOn:
     id: "clipboard.draft"
 - inputText: "Maestro clip one"
-- hideKeyboard
+# hideKeyboard fails on this screen (run 39363490145). Dismiss instead
+# with an unhandled tap on the plain empty-state text — present exactly
+# here (zero clips), inside the ScrollView, so under
+# keyboardShouldPersistTaps="handled" the tap resigns the input. Same
+# pattern that fixed 05/09 in that run.
+- tapOn: "Nothing saved yet.*"
 - tapOn: "Save text"
 - extendedWaitUntil:
     visible: ".*Maestro clip one.*"
@@ -17,7 +22,9 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
     id: "clipboard.edit"
 - eraseText: 40
 - inputText: "Maestro clip edited"
-- hideKeyboard
+# No hideKeyboard: it fails on this screen. The Save button sits
+# directly under the edit field, which iOS auto-scrolls above the
+# keyboard when the field is focused — tap Save directly.
 - tapOn: "Save"
 - extendedWaitUntil:
     visible: "Clip updated"
@@ -45,12 +52,13 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
 - tapOn:
     id: "clipboard.draft"
 - eraseText: 40
-- hideKeyboard
+# (No keyboard dismissal here — the draft is re-focused immediately.)
 # a second clip so cut/delete each act on one
 - tapOn:
     id: "clipboard.draft"
 - inputText: "Maestro clip two"
-- hideKeyboard
+# No hideKeyboard (fails here); "Save text" sits directly under the
+# focused draft field at the top of the screen, above the keyboard.
 - tapOn: "Save text"
 - extendedWaitUntil:
     visible: ".*Maestro clip two.*"

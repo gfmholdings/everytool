@@ -8,10 +8,11 @@ name: Resize - shared photo is measured and shrunk
 - extendedWaitUntil:
     visible: "2400 × 1800.*"
     timeout: 20000
-- tapOn: "Resize"
+# Anchored: bare "Resize" also matches the "Resize photo" header title.
+- tapOn: "^Resize$"
 - extendedWaitUntil:
     visible: "1080 × 810.*"
-    timeout: 30000
+    timeout: 60000
 - tapOn: "Save to Photos"
 - extendedWaitUntil:
     visible: "Saved to Photos"

@@ -27,12 +27,22 @@ name: Long screenshot from a finished screen recording (auto-open + auto-stitch)
       text: "View full length"
     direction: DOWN
     timeout: 20000
+# Let scroll momentum settle so the tap lands on the button, then
+# prove the viewer opened via its close control: the button's visible
+# text is "Done" but its accessibility label is "Close" (the text
+# folds into the Pressable), and the dims regex also matches the
+# result card's "1170 × 6732 px · …" line, so it cannot prove the
+# viewer opened — that is why run 39363490145 died at tapOn "Done".
+- waitForAnimationToEnd
 - tapOn: "View full length"
+- extendedWaitUntil:
+    visible: "Close"
+    timeout: 60000
 - assertVisible: "1170 × 6732"
 - scroll
 - scroll
 - takeScreenshot: 11-stitch-full-length
-- tapOn: "Done"
+- tapOn: "Close"
 - scrollUntilVisible:
     element:
       text: "Save to Photos"
