@@ -12,11 +12,28 @@ name: Long screenshot from three shared screenshots - stitch, save, share
 - extendedWaitUntil:
     visible: "Your long screenshot"
     timeout: 180000
+# The result card's size line sits below the 440pt preview — scroll it
+# into the viewport before asserting (assertVisible does not scroll).
+- scrollUntilVisible:
+    element:
+      text: "1170 × 4332 px.*"
+    direction: DOWN
+    timeout: 20000
 - assertVisible: "1170 × 4332 px.*"
 - takeScreenshot: 10-stitch-photos
+- scrollUntilVisible:
+    element:
+      text: "Save to Photos"
+    direction: DOWN
+    timeout: 20000
 - tapOn: "Save to Photos"
 - extendedWaitUntil:
     visible: "Saved to Photos"
+    timeout: 20000
+- scrollUntilVisible:
+    element:
+      text: "Share image"
+    direction: DOWN
     timeout: 20000
 - tapOn: "Share image"
 - extendedWaitUntil:

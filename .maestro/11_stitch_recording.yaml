@@ -8,18 +8,44 @@ name: Long screenshot from a finished screen recording (auto-open + auto-stitch)
 - extendedWaitUntil:
     visible: "Your long screenshot"
     timeout: 180000
+# Same viewport issue as the photo flow: scroll the size line into view.
+- scrollUntilVisible:
+    element:
+      text: "1170 × 6732 px.*"
+    direction: DOWN
+    timeout: 20000
 - assertVisible: "1170 × 6732 px.*"
+- scrollUntilVisible:
+    element:
+      text: "1 unchanged frames skipped.*"
+    direction: DOWN
+    timeout: 20000
 - assertVisible: "1 unchanged frames skipped.*"
 - takeScreenshot: 11-stitch-recording
+- scrollUntilVisible:
+    element:
+      text: "View full length"
+    direction: DOWN
+    timeout: 20000
 - tapOn: "View full length"
 - assertVisible: "1170 × 6732"
 - scroll
 - scroll
 - takeScreenshot: 11-stitch-full-length
 - tapOn: "Done"
+- scrollUntilVisible:
+    element:
+      text: "Save to Photos"
+    direction: DOWN
+    timeout: 20000
 - tapOn: "Save to Photos"
 - extendedWaitUntil:
     visible: "Saved to Photos"
+    timeout: 20000
+- scrollUntilVisible:
+    element:
+      text: "Copy image"
+    direction: DOWN
     timeout: 20000
 - tapOn: "Copy image"
 - extendedWaitUntil:

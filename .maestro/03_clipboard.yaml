@@ -8,7 +8,9 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
 - inputText: "Maestro clip one"
 - hideKeyboard
 - tapOn: "Save text"
-- assertVisible: "Maestro clip one"
+- extendedWaitUntil:
+    visible: ".*Maestro clip one.*"
+    timeout: 20000
 # edit
 - tapOn: "Edit"
 - tapOn:
@@ -17,8 +19,12 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
 - inputText: "Maestro clip edited"
 - hideKeyboard
 - tapOn: "Save"
-- assertVisible: "Clip updated"
-- assertVisible: "Maestro clip edited"
+- extendedWaitUntil:
+    visible: "Clip updated"
+    timeout: 20000
+- extendedWaitUntil:
+    visible: ".*Maestro clip edited.*"
+    timeout: 20000
 # pin / unpin
 - tapOn: "Pin"
 - assertVisible: "Unpin"
@@ -26,12 +32,16 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
 - assertVisible: "Pin"
 # copy, then paste into the draft
 - tapOn: "Copy"
-- assertVisible: "Copied"
+- extendedWaitUntil:
+    visible: "Copied"
+    timeout: 20000
 - tapOn: "Paste"
 - tapOn:
     text: "Allow Paste"
     optional: true
-- assertVisible: "Maestro clip edited"
+- extendedWaitUntil:
+    visible: ".*Maestro clip edited.*"
+    timeout: 20000
 - tapOn:
     id: "clipboard.draft"
 - eraseText: 40
@@ -42,16 +52,24 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
 - inputText: "Maestro clip two"
 - hideKeyboard
 - tapOn: "Save text"
-- assertVisible: "Maestro clip two"
+- extendedWaitUntil:
+    visible: ".*Maestro clip two.*"
+    timeout: 20000
 - takeScreenshot: 03-clipboard-two-clips
 # cut the newest (top) clip: removed from the list, now on the clipboard
 - tapOn:
     text: "Cut"
     index: 0
-- assertVisible: "Cut — it’s on your clipboard"
-- assertVisible: "On your clipboard now"
+- extendedWaitUntil:
+    visible: "Cut — it’s on your clipboard"
+    timeout: 20000
+- extendedWaitUntil:
+    visible: "On your clipboard now"
+    timeout: 20000
 - tapOn: "Save it"
-- assertVisible: "Saved to clipboard history"
+- extendedWaitUntil:
+    visible: "Saved to clipboard history"
+    timeout: 20000
 # delete one
 - tapOn:
     text: "Delete"

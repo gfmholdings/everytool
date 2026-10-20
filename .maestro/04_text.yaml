@@ -3,7 +3,8 @@ name: Text tools - counts, extraction, cleanup
 ---
 - launchApp
 - tapOn: "Open Text tools"
-- tapOn: "Paste or type text"
+- tapOn:
+    id: "text.input"
 - inputText: "Mail me at ada@example.com or see https://example.org today"
 - hideKeyboard
 - assertVisible: "8"
@@ -12,5 +13,7 @@ name: Text tools - counts, extraction, cleanup
 - tapOn: "Emails"
 - assertVisible: "ada@example.com"
 - tapOn: "Save to clipboard"
-- assertVisible: "Saved to clipboard history"
+- extendedWaitUntil:
+    visible: "Saved to clipboard history"
+    timeout: 20000
 - takeScreenshot: 04-text

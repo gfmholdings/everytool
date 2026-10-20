@@ -13,7 +13,10 @@ name: Days counter and Split bill
 - tapOn: "Open Split bill"
 - tapOn: "Bill total $"
 - inputText: "100"
-- hideKeyboard
+# decimal-pad has no dismiss key, so Maestro's hideKeyboard cannot work;
+# tapping the plain "Tip" label is an unhandled tap, which dismisses the
+# keyboard under keyboardShouldPersistTaps="handled" and changes nothing.
+- tapOn: "Tip"
 - assertVisible: "\\$118\\.00"
 - assertVisible: "\\$59\\.00"
 - tapOn: "+"

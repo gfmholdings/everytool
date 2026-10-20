@@ -145,7 +145,7 @@ export function QrScreen({
             onChange={setKind}
           />
           {kind === 'text' && (
-            <Field value={text} onChange={setText} placeholder="Text or a link" multiline />
+            <Field value={text} onChange={setText} placeholder="Text or a link" multiline testID="qr.text" />
           )}
           {kind === 'wifi' && (
             <>

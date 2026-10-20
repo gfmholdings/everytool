@@ -11,7 +11,10 @@ name: PDF tools - shared PDF, split pages, compress
 - tapOn: "Split"
 - tapOn: "Pages to keep.*"
 - inputText: "1-2"
-- hideKeyboard
+# Maestro's hideKeyboard fails on this screen; tapping the source row's
+# plain "3 pages" text is an unhandled tap, which dismisses the keyboard
+# under keyboardShouldPersistTaps="handled" and changes nothing.
+- tapOn: "3 pages"
 - tapOn: "Make the split PDF"
 - extendedWaitUntil:
     visible: "2 pages · .*"

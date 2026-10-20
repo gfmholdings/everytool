@@ -44,6 +44,7 @@ export function TextScreen({
         onChange={setText}
         placeholder="Paste or type text"
         multiline
+        testID="text.input"
       />
       <GhostButton
         label="Paste from clipboard"

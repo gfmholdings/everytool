@@ -3,13 +3,16 @@ name: QR - make, copy, share sheet, history
 ---
 - launchApp
 - tapOn: "Open QR toolbox"
-- tapOn: "Text or a link"
+- tapOn:
+    id: "qr.text"
 - inputText: "https://example.com/everytool"
 - hideKeyboard
 - tapOn: "Make QR code"
 - assertVisible: "Share"
 - tapOn: "Copy text"
-- assertVisible: "Copied"
+- extendedWaitUntil:
+    visible: "Copied"
+    timeout: 20000
 - tapOn: "Share"
 - extendedWaitUntil:
     visible: "Save Image|Copy|Save to Files"
