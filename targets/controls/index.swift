@@ -1,11 +1,34 @@
-import WidgetKit
 import SwiftUI
+import WidgetKit
 
+/// Every control Everytool offers in Control Center → Add a Control.
+/// WidgetBundleBuilder accepts at most 10 widgets per block, so the
+/// eleven controls are split across two nested bundles.
 @main
 struct EverytoolControls: WidgetBundle {
-    var body: some Widget {
-        StitchControl()
-        ConvertControl()
-        QrControl()
-    }
+  var body: some Widget {
+    EverytoolCaptureControls().body
+    EverytoolToolControls().body
+  }
+}
+
+struct EverytoolCaptureControls: WidgetBundle {
+  var body: some Widget {
+    RecordControl()
+    StitchControl()
+    ClipboardControl()
+    ConvertControl()
+    QrControl()
+  }
+}
+
+struct EverytoolToolControls: WidgetBundle {
+  var body: some Widget {
+    ResizeControl()
+    PdfControl()
+    TextControl()
+    DaysControl()
+    SplitControl()
+    GifControl()
+  }
 }

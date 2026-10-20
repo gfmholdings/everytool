@@ -15,8 +15,10 @@ import {
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
 
+import { File } from 'expo-file-system';
+
 import { ToolGlyph } from './src/components/ui';
-import { drainShareInbox } from './src/lib/incoming';
+import { drainShareInbox, readBroadcastInbox } from './src/lib/incoming';
 import type { ShotInput } from './src/lib/stitch';
 import { ClipboardScreen } from './src/screens/ClipboardScreen';
 import { ConvertScreen } from './src/screens/ConvertScreen';
@@ -39,12 +41,30 @@ interface Pending {
   pdf?: { uri: string; name: string };
   stitchShots?: ShotInput[];
   text?: string;
+  autoRecord?: boolean;
+  /** Changes on every "record" request so a mounted screen reacts too. */
+  recordNonce?: number;
+}
+
+/** Tool ids arriving from controls / links: "<tool>" or "stitch:record". */
+function parseToolRef(ref: string | null | undefined): { id: ToolId; record: boolean } | null {
+  if (!ref) return null;
+  const clean = ref.replace(/^\/+|\/+$/g, '');
+  if (clean === 'record' || clean === 'stitch:record' || clean === 'stitch/record') {
+    return { id: 'stitch', record: true };
+  }
+  const id = clean as ToolId;
+  return TOOLS.some((t) => t.id === id) ? { id, record: false } : null;
 }
 
 function Root() {
   const insets = useSafeAreaInsets();
   const { ready, addClip } = useStore();
   const [tool, setTool] = useState<ToolId | null>(null);
+  const toolRef = useRef<ToolId | null>(null);
+  useEffect(() => {
+    toolRef.current = tool;
+  }, [tool]);
   const [pending, setPending] = useState<Pending | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [toastAnim] = useState(() => new Animated.Value(0));
@@ -71,80 +91,36 @@ function Root() {
   );
 
   const openTool = useCallback((id: ToolId, p?: Omit<Pending, 'tool'>) => {
-    setPending(p ? { tool: id, ...p } : null);
+    setPending(p ? { tool: id, ...p, recordNonce: Date.now() } : null);
     setTool(id);
   }, []);
 
-  // Deep links: everytool://tool/<id> (Control Center, share sheet,
-  // broadcast setup) and everytool://stitch for finished recordings.
-  useEffect(() => {
-    const handle = (url: string | null) => {
-      if (!url) return;
-      const parsed = Linking.parse(url);
-      const path = (parsed.path ?? '').replace(/^\//, '');
-      if (parsed.hostname === 'tool' || path.startsWith('tool/')) {
-        const id = (parsed.hostname === 'tool'
-          ? path
-          : path.replace('tool/', '')) as ToolId;
-        if (TOOLS.some((t) => t.id === id)) openTool(id);
-      } else if (parsed.hostname === 'stitch' || path === 'stitch') {
-        openTool('stitch');
-      }
-    };
-    const sub = Linking.addEventListener('url', ({ url }) => handle(url));
-    void Linking.getInitialURL().then(handle);
-    return () => sub.remove();
-  }, [openTool ]);
-
-  // Control Center controls record their tool in the App Group; consume
-  // it whenever the app activates. The intent's perform() can land just
-  // after the activation event fires, so each activation checks now and
-  // again at ~250ms and ~700ms — takePendingTool clears the key when it
-  // reads it, so the repeats are no-ops once the tool is consumed.
-  useEffect(() => {
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    const check = () => {
-      const id = takePendingTool() as ToolId | null;
-      if (id && TOOLS.some((t) => t.id === id)) openTool(id);
-    };
-    const checkWithRetries = () => {
-      check();
-      timers.push(setTimeout(check, 250));
-      timers.push(setTimeout(check, 700));
-    };
-    checkWithRetries();
-    const sub = RNAppState.addEventListener('change', (s) => {
-      if (s === 'active') checkWithRetries();
-    });
-    return () => {
-      sub.remove();
-      timers.forEach((t) => clearTimeout(t));
-    };
-  }, [openTool]);
-
-  // Drain the share inbox on launch: route each item to the tool the user
-  // picked in the share sheet.
-  useEffect(() => {
-    if (!ready) return;
-    let live = true;
-    void drainShareInbox().then((items) => {
-      if (!live || items.length === 0) return;
+  // Files shared into Everytool land in the App Group's ShareInbox; route
+  // them to the tool picked in the share sheet. Runs at launch, on every
+  // activation and on every deep link — the share extension opens the
+  // app with everytool://tool/<id> while it may already be running.
+  const draining = useRef(false);
+  const drainAndRoute = useCallback(async (): Promise<boolean> => {
+    if (draining.current) return false;
+    draining.current = true;
+    try {
+      const items = await drainShareInbox();
       const first = items[0];
-      if (!first) return;
+      if (!first) return false;
       const { item, uri } = first;
       if (item.kind === 'text') {
-        // Text shares arrive as files holding the text.
-        void fetch(uri)
-          .then((r) => r.text())
-          .then((text) => {
-            if (addClip(text)) notify('Saved to clipboard history');
-          })
-          .catch(() => {});
-        return;
-      }
-      if (item.tool === 'clipboard') {
-        notify('Shared photos can’t be clips — pick a tool instead');
-        return;
+        let saved = 0;
+        for (const x of items.filter((i) => i.item.kind === 'text')) {
+          try {
+            const text = await new File(x.uri).text();
+            if (addClip(text)) saved += 1;
+          } catch {
+            // unreadable item: skip it
+          }
+        }
+        if (saved > 0) notify(saved === 1 ? 'Saved to clipboard history' : `Saved ${saved} clips`);
+        openTool('clipboard');
+        return true;
       }
       if (item.kind === 'pdf') {
         openTool('pdf', { pdf: { uri, name: item.file } });
@@ -161,11 +137,73 @@ function Root() {
       } else {
         openTool(item.tool);
       }
+      return true;
+    } finally {
+      draining.current = false;
+    }
+  }, [addClip, notify, openTool]);
+
+  // A finished screen recording waiting in the App Group opens the
+  // stitcher (e.g. after tapping the "ready" notification).
+  const checkRecording = useCallback(async () => {
+    if (toolRef.current === 'stitch') return;
+    const inbox = await readBroadcastInbox();
+    if (inbox.finished && inbox.frames.length > 0) openTool('stitch');
+  }, [openTool]);
+
+  // Deep links: everytool://tool/<id> (Control Center, share sheet,
+  // notifications) and everytool://stitch for finished recordings.
+  useEffect(() => {
+    if (!ready) return;
+    const handle = (url: string | null) => {
+      if (!url) return;
+      const parsed = Linking.parse(url);
+      const path = (parsed.path ?? '').replace(/^\//, '');
+      let ref: string | null = null;
+      if (parsed.hostname === 'tool') ref = path;
+      else if (path.startsWith('tool/')) ref = path.slice('tool/'.length);
+      else if (parsed.hostname === 'stitch' || path === 'stitch') ref = 'stitch';
+      else if (parsed.hostname === 'record' || path === 'record') ref = 'record';
+      void drainAndRoute().then((routed) => {
+        if (routed) return;
+        const target = parseToolRef(ref);
+        if (target) openTool(target.id, target.record ? { autoRecord: true } : undefined);
+      });
+    };
+    const sub = Linking.addEventListener('url', ({ url }) => handle(url));
+    void Linking.getInitialURL().then(handle);
+    return () => sub.remove();
+  }, [ready, openTool, drainAndRoute]);
+
+  // Control Center controls record their tool in the App Group; consume
+  // it whenever the app activates. The intent's perform() can land just
+  // after the activation event fires, so each activation checks now and
+  // again at ~250ms and ~700ms — takePendingTool clears the key when it
+  // reads it, so the repeats are no-ops once the tool is consumed.
+  useEffect(() => {
+    if (!ready) return;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const check = () => {
+      const target = parseToolRef(takePendingTool());
+      if (target) openTool(target.id, target.record ? { autoRecord: true } : undefined);
+    };
+    const onActive = () => {
+      check();
+      timers.push(setTimeout(check, 250));
+      timers.push(setTimeout(check, 700));
+      void drainAndRoute().then((routed) => {
+        if (!routed) void checkRecording();
+      });
+    };
+    onActive();
+    const sub = RNAppState.addEventListener('change', (st) => {
+      if (st === 'active') onActive();
     });
     return () => {
-      live = false;
+      sub.remove();
+      timers.forEach((t) => clearTimeout(t));
     };
-  }, [ready, addClip, notify, openTool]);
+  }, [ready, openTool, drainAndRoute, checkRecording]);
 
   if (!ready) {
     return (
@@ -187,6 +225,7 @@ function Root() {
         <StitchScreen
           onBack={back}
           initialShots={pending?.stitchShots}
+          recordRequest={pending?.autoRecord ? pending.recordNonce : undefined}
           notify={notify}
         />
       );
@@ -269,13 +308,14 @@ function Root() {
           <View style={styles.surfacesCard}>
             <Text style={type.h2}>Everywhere you are</Text>
             <Text style={[type.body, styles.spaced]}>
-              The clipboard and text tools also live in the Everytool
-              keyboard. Add it in Settings → General → Keyboard, then hold
-              the globe key in any app.
+              Your clipboard lives in the Everytool keyboard too — paste,
+              copy, cut, save and edit clips in any app. Add it in Settings
+              → General → Keyboard → Keyboards, turn on Allow Full Access,
+              then hold the globe key.
             </Text>
             <Text style={[type.body, styles.spaced]}>
-              Add Stitch, Convert and QR to Control Center (swipe down,
-              hold, Add a Control) and they’re one swipe away, in any app.
+              Every tool — plus Record Long Screenshot — can go in Control
+              Center: swipe down, tap +, Add a Control, search “Everytool”.
             </Text>
           </View>
         </ScrollView>

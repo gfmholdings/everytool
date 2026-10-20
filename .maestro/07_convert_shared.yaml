@@ -1,0 +1,24 @@
+appId: app.everytool.ios
+name: Convert - photo arriving from the share sheet (app already running)
+---
+- openLink: "everytool://tool/convert"
+- tapOn:
+    text: "Open"
+    optional: true
+- extendedWaitUntil:
+    visible: "2400 × 1800"
+    timeout: 20000
+- tapOn: "Convert to JPG"
+- extendedWaitUntil:
+    visible: "Done"
+    timeout: 30000
+- tapOn: "Save to Photos"
+- extendedWaitUntil:
+    visible: "Saved to Photos"
+    timeout: 15000
+- tapOn: "PDF"
+- tapOn: "Convert to PDF"
+- extendedWaitUntil:
+    visible: "photos.pdf.*"
+    timeout: 30000
+- takeScreenshot: 07-convert

@@ -18,6 +18,9 @@
           <integer>20</integer>
           <key>NSExtensionActivationSupportsText</key>
           <true/>
+          <!-- Safari and most apps share a page as a URL, not text. -->
+          <key>NSExtensionActivationSupportsWebURLWithMaxCount</key>
+          <integer>1</integer>
           <key>NSExtensionActivationSupportsFileWithMaxCount</key>
           <integer>10</integer>
         </dict>

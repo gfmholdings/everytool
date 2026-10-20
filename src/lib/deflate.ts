@@ -1,4 +1,10 @@
-// Minimal DEFLATE (RFC 1951) decoder for PNG thumbnails and strips.
+import { unzlibSync, Zlib } from 'fflate';
+
+// PNG codec for Everytool: a spec-written raw DEFLATE decoder (kept for
+// tests and tiny inputs), a fast row-streaming PNG decoder and a streaming
+// compressed PNG encoder, both on fflate. Pure JS, runs anywhere.
+//
+// (Original note:) Minimal DEFLATE (RFC 1951) decoder.
 // Only used on images Everytool itself produced (via
 // expo-image-manipulator): 8-bit, non-interlaced PNGs. Written from the
 // spec; no dependencies, runs anywhere JS runs.
@@ -160,23 +166,39 @@ function paeth(a: number, b: number, c: number): number {
 export interface PngInfo {
   width: number;
   height: number;
-  channels: number; // 1 gray, 3 RGB, 4 RGBA
+  channels: number; // 1 gray, 2 gray+alpha, 3 RGB, 4 RGBA
+}
+
+function readU32(bytes: Uint8Array, at: number): number {
+  return (
+    (((bytes[at] ?? 0) << 24) |
+      ((bytes[at + 1] ?? 0) << 16) |
+      ((bytes[at + 2] ?? 0) << 8) |
+      (bytes[at + 3] ?? 0)) >>>
+    0
+  );
+}
+
+/** Read width/height from a PNG header without decoding pixels. */
+export function readPngSize(bytes: Uint8Array): { width: number; height: number } | null {
+  if (bytes.length < 24 || bytes[0] !== 0x89 || bytes[1] !== 0x50) return null;
+  return { width: readU32(bytes, 16), height: readU32(bytes, 20) };
 }
 
 /**
  * Stream-decode an 8-bit non-interlaced PNG, calling onRow once per row
- * with that row's RGBA pixels (width*4 bytes). Memory stays at one row
- * plus the inflated scanline buffer of the source.
+ * with that row's RGBA pixels (width*4 bytes). The row buffer is REUSED
+ * between calls — copy it if you keep it. Pass `stopAfterRow` to stop
+ * unfiltering once that row has been delivered (rows are sequential, so
+ * the rest of the image is never touched).
  */
 export function decodePngRows(
   bytes: Uint8Array,
   onRow: (y: number, rgbaRow: Uint8Array) => void,
+  stopAfterRow?: number,
 ): PngInfo {
   // Verify the PNG signature before chunk parsing, and name the actual
-  // format when a foreign file slips through: "Unsupported PNG format"
-  // told the user nothing when the real problem was a HEIC/JPEG photo.
-  // (Everytool's own pipeline re-encodes to PNG before decoding, so a
-  // foreign format here means a foreign file reached the decoder.)
+  // format when a foreign file slips through.
   const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
   const isPng =
     bytes.length >= PNG_SIGNATURE.length &&
@@ -207,14 +229,11 @@ export function decodePngRows(
   let bitDepth = 8;
   let colorType = 6;
   let interlace = 0;
-  const idat: number[] = [];
+  const parts: Uint8Array[] = [];
+  let idatLength = 0;
   let pos = 8;
-  while (pos < bytes.length) {
-    const len =
-      ((bytes[pos] ?? 0) << 24) |
-      ((bytes[pos + 1] ?? 0) << 16) |
-      ((bytes[pos + 2] ?? 0) << 8) |
-      (bytes[pos + 3] ?? 0);
+  while (pos + 8 <= bytes.length) {
+    const len = readU32(bytes, pos);
     const type = String.fromCharCode(
       bytes[pos + 4] ?? 0,
       bytes[pos + 5] ?? 0,
@@ -223,21 +242,14 @@ export function decodePngRows(
     );
     const dataStart = pos + 8;
     if (type === 'IHDR') {
-      width =
-        ((bytes[dataStart] ?? 0) << 24) |
-        ((bytes[dataStart + 1] ?? 0) << 16) |
-        ((bytes[dataStart + 2] ?? 0) << 8) |
-        (bytes[dataStart + 3] ?? 0);
-      height =
-        ((bytes[dataStart + 4] ?? 0) << 24) |
-        ((bytes[dataStart + 5] ?? 0) << 16) |
-        ((bytes[dataStart + 6] ?? 0) << 8) |
-        (bytes[dataStart + 7] ?? 0);
+      width = readU32(bytes, dataStart);
+      height = readU32(bytes, dataStart + 4);
       bitDepth = bytes[dataStart + 8] ?? 8;
       colorType = bytes[dataStart + 9] ?? 6;
       interlace = bytes[dataStart + 12] ?? 0;
     } else if (type === 'IDAT') {
-      for (let i = 0; i < len; i += 1) idat.push(bytes[dataStart + i] ?? 0);
+      parts.push(bytes.subarray(dataStart, dataStart + len));
+      idatLength += len;
     } else if (type === 'IEND') {
       break;
     }
@@ -247,50 +259,88 @@ export function decodePngRows(
     throw new Error('Unsupported PNG format.');
   }
   const channels =
-    colorType === 6 ? 4 : colorType === 2 ? 3 : colorType === 0 ? 1 : 0;
+    colorType === 6
+      ? 4
+      : colorType === 2
+        ? 3
+        : colorType === 0
+          ? 1
+          : colorType === 4
+            ? 2
+            : 0;
   if (channels === 0) throw new Error('Unsupported PNG color type.');
-  const raw = inflateRaw(new Uint8Array(idat).subarray(2));
+  const idat = new Uint8Array(idatLength);
+  let at = 0;
+  for (const part of parts) {
+    idat.set(part, at);
+    at += part.length;
+  }
+  const raw = unzlibSync(idat);
   const stride = width * channels;
-  let prev: Uint8Array | null = null;
-  for (let y = 0; y < height; y += 1) {
+  if (raw.length < (stride + 1) * height) {
+    throw new Error('PNG data is truncated.');
+  }
+  let prev = new Uint8Array(stride);
+  let row = new Uint8Array(stride);
+  const rgba = new Uint8Array(width * 4);
+  const last = stopAfterRow === undefined ? height - 1 : Math.min(height - 1, stopAfterRow);
+  for (let y = 0; y <= last; y += 1) {
     const rowStart = y * (stride + 1);
-    const filter = raw[rowStart] ?? 0;
-    const row = new Uint8Array(stride);
-    for (let x = 0; x < stride; x += 1) {
-      const rawByte = raw[rowStart + 1 + x] ?? 0;
-      const a = x >= channels ? row[x - channels] ?? 0 : 0;
-      const b = prev ? prev[x] ?? 0 : 0;
-      const c = prev && x >= channels ? prev[x - channels] ?? 0 : 0;
-      let v = rawByte;
-      switch (filter) {
-        case 1:
-          v = (rawByte + a) & 0xff;
-          break;
-        case 2:
-          v = (rawByte + b) & 0xff;
-          break;
-        case 3:
-          v = (rawByte + Math.floor((a + b) / 2)) & 0xff;
-          break;
-        case 4:
-          v = (rawByte + paeth(a, b, c)) & 0xff;
-          break;
-        default:
-          v = rawByte;
-      }
-      row[x] = v;
+    const filter = raw[rowStart];
+    const src = rowStart + 1;
+    switch (filter) {
+      case 0:
+        row.set(raw.subarray(src, src + stride));
+        break;
+      case 1:
+        for (let x = 0; x < stride; x += 1) {
+          const a = x >= channels ? row[x - channels]! : 0;
+          row[x] = (raw[src + x]! + a) & 0xff;
+        }
+        break;
+      case 2:
+        for (let x = 0; x < stride; x += 1) {
+          row[x] = (raw[src + x]! + prev[x]!) & 0xff;
+        }
+        break;
+      case 3:
+        for (let x = 0; x < stride; x += 1) {
+          const a = x >= channels ? row[x - channels]! : 0;
+          row[x] = (raw[src + x]! + ((a + prev[x]!) >> 1)) & 0xff;
+        }
+        break;
+      case 4:
+        for (let x = 0; x < stride; x += 1) {
+          const a = x >= channels ? row[x - channels]! : 0;
+          const c = x >= channels ? prev[x - channels]! : 0;
+          row[x] = (raw[src + x]! + paeth(a, prev[x]!, c)) & 0xff;
+        }
+        break;
+      default:
+        throw new Error('Corrupt PNG row filter.');
     }
-    const rgba = new Uint8Array(width * 4);
-    for (let x = 0; x < width; x += 1) {
-      const si = x * channels;
-      const di = x * 4;
-      rgba[di] = row[si] ?? 0;
-      rgba[di + 1] = channels > 1 ? row[si + 1] ?? 0 : row[si] ?? 0;
-      rgba[di + 2] = channels > 2 ? row[si + 2] ?? 0 : row[si] ?? 0;
-      rgba[di + 3] = channels === 4 ? row[si + 3] ?? 255 : 255;
+    if (channels === 4) {
+      rgba.set(row);
+    } else {
+      for (let x = 0, si = 0, di = 0; x < width; x += 1, si += channels, di += 4) {
+        const v = row[si]!;
+        if (channels >= 3) {
+          rgba[di] = v;
+          rgba[di + 1] = row[si + 1]!;
+          rgba[di + 2] = row[si + 2]!;
+          rgba[di + 3] = 255;
+        } else {
+          rgba[di] = v;
+          rgba[di + 1] = v;
+          rgba[di + 2] = v;
+          rgba[di + 3] = channels === 2 ? row[si + 1]! : 255;
+        }
+      }
     }
     onRow(y, rgba);
+    const t = prev;
     prev = row;
+    row = t;
   }
   return { width, height, channels };
 }
@@ -344,22 +394,45 @@ export interface ByteSink {
   write: (bytes: Uint8Array) => void;
 }
 
+export interface PngWriterOptions {
+  /** zlib level 0–9; 0 writes stored blocks. Default 4 (fast, ~10–20× on screenshots). */
+  level?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+  /** Keep the alpha channel (RGBA). Default false: screenshots are opaque, RGB is 25% smaller. */
+  alpha?: boolean;
+}
+
+const IDAT_CHUNK = 256 * 1024;
+
 /**
- * Streaming PNG encoder: feed RGBA rows top to bottom. Rows are framed
- * (filter byte 0) into a zlib stream of stored DEFLATE blocks carried in
- * IDAT chunks, so a strip thousands of pixels tall never sits in memory.
- * The zlib Adler-32 is emitted as the last IDAT data before IEND.
+ * Streaming PNG encoder: feed RGBA rows top to bottom. Rows are filtered
+ * (Up), compressed by a streaming zlib (fflate) and emitted as IDAT
+ * chunks, so an image of any height is written with memory for a couple
+ * of rows plus the compressor window — long screenshots have no height
+ * limit beyond free storage.
  */
 export class PngStreamWriter {
   private sink: ByteSink;
   private width: number;
-  private adler = 1;
-  private pending: number[] = [];
+  private height: number;
+  private channels: number;
+  private zlib: Zlib;
+  private prev: Uint8Array;
+  private framed: Uint8Array;
+  private out: Uint8Array;
+  private outLen = 0;
+  private rows = 0;
   private finished = false;
 
-  constructor(sink: ByteSink, width: number, height: number) {
+  constructor(sink: ByteSink, width: number, height: number, opts: PngWriterOptions = {}) {
+    if (width <= 0 || height <= 0) throw new Error('Image has no size.');
     this.sink = sink;
     this.width = width;
+    this.height = height;
+    this.channels = opts.alpha ? 4 : 3;
+    const stride = width * this.channels;
+    this.prev = new Uint8Array(stride);
+    this.framed = new Uint8Array(stride + 1);
+    this.out = new Uint8Array(IDAT_CHUNK);
     sink.write(
       new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     );
@@ -367,10 +440,10 @@ export class PngStreamWriter {
     ihdr.set(u32be(width), 0);
     ihdr.set(u32be(height), 4);
     ihdr[8] = 8; // bit depth
-    ihdr[9] = 6; // color type RGBA
+    ihdr[9] = this.channels === 4 ? 6 : 2; // RGBA or RGB
     this.writeChunk('IHDR', ihdr);
-    // The zlib header (0x78 0x01) precedes the first DEFLATE block; it is
-    // prepended in emitBlock, NOT part of the stored-block payload.
+    this.zlib = new Zlib({ level: opts.level ?? 4 });
+    this.zlib.ondata = (chunk: Uint8Array) => this.collect(chunk);
   }
 
   private writeChunk(type: string, data: Uint8Array): void {
@@ -383,48 +456,65 @@ export class PngStreamWriter {
     this.sink.write(u32be((crc ^ 0xffffffff) >>> 0));
   }
 
-  private zlibStarted = false;
-
-  private emitBlock(final: boolean): void {
-    const take = Math.min(65535, this.pending.length);
-    const block = new Uint8Array(5 + take);
-    block[0] = final ? 1 : 0; // BFINAL, BTYPE=00, padded to byte boundary
-    block[1] = take & 0xff;
-    block[2] = (take >> 8) & 0xff;
-    const nlen = 0xffff - take;
-    block[3] = nlen & 0xff;
-    block[4] = (nlen >> 8) & 0xff;
-    block.set(this.pending.slice(0, take), 5);
-    this.pending = this.pending.slice(take);
-    if (!this.zlibStarted) {
-      this.zlibStarted = true;
-      const withHeader = new Uint8Array(block.length + 2);
-      withHeader[0] = 0x78; // zlib CMF: deflate, 32K window
-      withHeader[1] = 0x01; // zlib FLG: no compression, check bits valid
-      withHeader.set(block, 2);
-      this.writeChunk('IDAT', withHeader);
-    } else {
-      this.writeChunk('IDAT', block);
+  private collect(chunk: Uint8Array): void {
+    let at = 0;
+    while (at < chunk.length) {
+      const take = Math.min(chunk.length - at, this.out.length - this.outLen);
+      this.out.set(chunk.subarray(at, at + take), this.outLen);
+      this.outLen += take;
+      at += take;
+      if (this.outLen === this.out.length) this.flushIdat();
     }
+  }
+
+  private flushIdat(): void {
+    if (this.outLen === 0) return;
+    this.writeChunk('IDAT', this.out.slice(0, this.outLen));
+    this.outLen = 0;
+  }
+
+  /** Rows written so far. */
+  get rowCount(): number {
+    return this.rows;
   }
 
   writeRow(rgbaRow: Uint8Array): void {
     if (this.finished) throw new Error('PNG already finished.');
-    const framed = new Uint8Array(this.width * 4 + 1);
-    framed[0] = 0; // filter: none
-    framed.set(rgbaRow.subarray(0, this.width * 4), 1);
-    this.adler = adler32Update(this.adler, framed);
-    for (let i = 0; i < framed.length; i += 1) this.pending.push(framed[i] ?? 0);
-    while (this.pending.length > 65535) this.emitBlock(false);
+    if (this.rows >= this.height) throw new Error('More rows than the PNG height.');
+    const { width, channels, framed, prev } = this;
+    framed[0] = 2; // filter: Up — screenshots repeat row to row
+    if (channels === 4) {
+      for (let i = 0; i < width * 4; i += 1) {
+        const v = rgbaRow[i] ?? 0;
+        framed[i + 1] = (v - prev[i]!) & 0xff;
+        prev[i] = v;
+      }
+    } else {
+      for (let x = 0, si = 0, di = 0; x < width; x += 1, si += 4, di += 3) {
+        const r = rgbaRow[si] ?? 0;
+        const g = rgbaRow[si + 1] ?? 0;
+        const b = rgbaRow[si + 2] ?? 0;
+        framed[di + 1] = (r - prev[di]!) & 0xff;
+        framed[di + 2] = (g - prev[di + 1]!) & 0xff;
+        framed[di + 3] = (b - prev[di + 2]!) & 0xff;
+        prev[di] = r;
+        prev[di + 1] = g;
+        prev[di + 2] = b;
+      }
+    }
+    this.rows += 1;
+    // fflate may hold a reference to the pushed buffer; push a copy.
+    this.zlib.push(framed.slice(), false);
   }
 
   finish(): void {
     if (this.finished) return;
+    if (this.rows !== this.height) {
+      throw new Error(`PNG expected ${this.height} rows, got ${this.rows}.`);
+    }
     this.finished = true;
-    // One last stored block carries BFINAL (possibly empty), then the
-    // Adler-32 closes the zlib stream as final IDAT data, then IEND.
-    this.emitBlock(true);
-    this.writeChunk('IDAT', u32be(this.adler));
+    this.zlib.push(new Uint8Array(0), true);
+    this.flushIdat();
     this.writeChunk('IEND', new Uint8Array(0));
   }
 }

@@ -9,6 +9,6 @@ module.exports = function (config) {
     entitlements: {
       'com.apple.security.application-groups': ['group.app.everytool.ios'],
     },
-    frameworks: ['ReplayKit', 'CoreImage', 'ImageIO'],
+    frameworks: ['ReplayKit', 'CoreImage', 'ImageIO', 'UserNotifications'],
   };
 };

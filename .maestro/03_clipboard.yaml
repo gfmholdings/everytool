@@ -1,0 +1,59 @@
+appId: app.everytool.ios
+name: Clipboard - save, edit, pin, copy, paste, cut, delete
+---
+- launchApp
+- tapOn: "Open Clipboard"
+- tapOn:
+    id: "clipboard.draft"
+- inputText: "Maestro clip one"
+- hideKeyboard
+- tapOn: "Save text"
+- assertVisible: "Maestro clip one"
+# edit
+- tapOn: "Edit"
+- tapOn:
+    id: "clipboard.edit"
+- eraseText: 40
+- inputText: "Maestro clip edited"
+- hideKeyboard
+- tapOn: "Save"
+- assertVisible: "Clip updated"
+- assertVisible: "Maestro clip edited"
+# pin / unpin
+- tapOn: "Pin"
+- assertVisible: "Unpin"
+- tapOn: "Unpin"
+- assertVisible: "Pin"
+# copy, then paste into the draft
+- tapOn: "Copy"
+- assertVisible: "Copied"
+- tapOn: "Paste"
+- tapOn:
+    text: "Allow Paste"
+    optional: true
+- assertVisible: "Maestro clip edited"
+- tapOn:
+    id: "clipboard.draft"
+- eraseText: 40
+- hideKeyboard
+# a second clip so cut/delete each act on one
+- tapOn:
+    id: "clipboard.draft"
+- inputText: "Maestro clip two"
+- hideKeyboard
+- tapOn: "Save text"
+- assertVisible: "Maestro clip two"
+- takeScreenshot: 03-clipboard-two-clips
+# cut the newest (top) clip: removed from the list, now on the clipboard
+- tapOn:
+    text: "Cut"
+    index: 0
+- assertVisible: "Cut — it’s on your clipboard"
+- assertVisible: "On your clipboard now"
+- tapOn: "Save it"
+- assertVisible: "Saved to clipboard history"
+# delete one
+- tapOn:
+    text: "Delete"
+    index: 0
+- takeScreenshot: 03-clipboard-done

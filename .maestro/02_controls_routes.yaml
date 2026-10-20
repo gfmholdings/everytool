@@ -1,0 +1,34 @@
+appId: app.everytool.ios
+name: Every Control Center tool id opens its tool (same route the controls use)
+---
+- launchApp
+- runFlow:
+    file: subflows/open-tool.yaml
+    env: { TOOL: stitch, TITLE: "Long screenshot" }
+- runFlow:
+    file: subflows/open-tool.yaml
+    env: { TOOL: clipboard, TITLE: "Clipboard" }
+- runFlow:
+    file: subflows/open-tool.yaml
+    env: { TOOL: convert, TITLE: "Convert" }
+- runFlow:
+    file: subflows/open-tool.yaml
+    env: { TOOL: qr, TITLE: "QR toolbox" }
+- runFlow:
+    file: subflows/open-tool.yaml
+    env: { TOOL: resize, TITLE: "Resize photo" }
+- runFlow:
+    file: subflows/open-tool.yaml
+    env: { TOOL: pdf, TITLE: "PDF tools" }
+- runFlow:
+    file: subflows/open-tool.yaml
+    env: { TOOL: text, TITLE: "Text tools" }
+- runFlow:
+    file: subflows/open-tool.yaml
+    env: { TOOL: days, TITLE: "Days counter" }
+- runFlow:
+    file: subflows/open-tool.yaml
+    env: { TOOL: split, TITLE: "Split bill" }
+- runFlow:
+    file: subflows/open-tool.yaml
+    env: { TOOL: gif, TITLE: "Video to GIF" }

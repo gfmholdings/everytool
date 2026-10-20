@@ -4,9 +4,9 @@ import test from 'node:test';
 import { parsePageSpec, specToIndices } from '../src/lib/pages.ts';
 import { contactPayload, wifiPayload } from '../src/lib/qrpayload.ts';
 import {
-  planStitch,
-  STITCH_MAX_HEIGHT,
+  scaledHeight,
   STITCH_MAX_WIDTH,
+  stitchWidth,
 } from '../src/lib/stitchMath.ts';
 
 test('page spec: 1-based pages, ranges, dedupe, clamp', () => {
@@ -18,48 +18,23 @@ test('page spec: 1-based pages, ranges, dedupe, clamp', () => {
   assert.deepEqual(specToIndices('1-2,4', 10), [0, 1, 3]);
 });
 
-test('stitch plan: working width is the narrowest shot, capped', () => {
-  const plan = planStitch(
-    [
+test('stitch width: narrowest shot, capped at phone width', () => {
+  assert.equal(
+    stitchWidth([
       { width: 4284, height: 5712 },
       { width: 4284, height: 5712 },
-    ],
-    [0],
+    ]),
+    STITCH_MAX_WIDTH,
   );
-  assert.equal(plan.width, STITCH_MAX_WIDTH);
-  assert.equal(plan.outWidth, STITCH_MAX_WIDTH);
+  assert.equal(stitchWidth([{ width: 828, height: 1792 }, { width: 1170, height: 2532 }]), 828);
+  assert.equal(stitchWidth([]), 0);
+  // unknown sizes (0) from the share sheet don't collapse the width
+  assert.equal(stitchWidth([{ width: 0, height: 0 }, { width: 1170, height: 2532 }]), 1170);
 });
 
-test('stitch plan: output height is capped and the strip shrinks', () => {
-  const shots = Array.from({ length: 10 }, () => ({
-    width: 1170,
-    height: 2532,
-  }));
-  const plan = planStitch(shots, Array(9).fill(0));
-  assert.equal(plan.height, STITCH_MAX_HEIGHT);
-  assert.equal(plan.capped, true);
-  assert.ok(plan.outWidth < plan.width);
-});
-
-test('stitch plan: overlap is subtracted, missing overlap stacks', () => {
-  const plan = planStitch(
-    [
-      { width: 1000, height: 1000 },
-      { width: 1000, height: 1000 },
-      { width: 1000, height: 1000 },
-    ],
-    [250, 0],
-  );
-  assert.equal(plan.naturalHeight, 1000 + 750 + 1000);
-  assert.deepEqual(plan.offsetsY, [0, 750, 1750]);
-  assert.equal(plan.stacked, true); // second seam had no overlap
-  assert.equal(plan.capped, false);
-});
-
-test('stitch plan: empty input is a zero plan', () => {
-  const plan = planStitch([], []);
-  assert.equal(plan.height, 0);
-  assert.equal(plan.width, 0);
+test('scaled height keeps aspect', () => {
+  assert.equal(scaledHeight({ width: 2340, height: 5064 }, 1170), 2532);
+  assert.equal(scaledHeight({ width: 0, height: 10 }, 1170), 0);
 });
 
 test('wifi payload escapes specials; open nets carry no password', () => {

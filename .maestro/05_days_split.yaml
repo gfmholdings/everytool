@@ -1,0 +1,21 @@
+appId: app.everytool.ios
+name: Days counter and Split bill
+---
+- launchApp
+- tapOn: "Open Days counter"
+- assertVisible: "30"
+- tapOn: "Until"
+- assertVisible: "days to go"
+- tapOn: "Age"
+- assertVisible: "days old"
+- takeScreenshot: 05-days
+- tapOn: "Back"
+- tapOn: "Open Split bill"
+- tapOn: "Bill total $"
+- inputText: "100"
+- hideKeyboard
+- assertVisible: "\\$118\\.00"
+- assertVisible: "\\$59\\.00"
+- tapOn: "+"
+- assertVisible: "\\$39\\.34"
+- takeScreenshot: 05-split

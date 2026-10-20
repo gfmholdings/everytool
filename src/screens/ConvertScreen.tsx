@@ -1,12 +1,11 @@
 import { File } from 'expo-file-system';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
-import * as MediaLibrary from 'expo-media-library';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Image, StyleSheet, Text } from 'react-native';
 
 import { Card, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
-import { formatBytes, shareFile, tempFileUri } from '../lib/files';
+import { formatBytes, measureImage, saveToPhotos, shareFile, tempFileUri } from '../lib/files';
 import { mergePdfSources, pdfSourceFromUri, type PdfSource } from '../lib/pdf';
 import { colors, type } from '../theme';
 
@@ -48,6 +47,23 @@ export function ConvertScreen({
   const [result, setResult] = useState<Result | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Files from the share sheet arrive without a size; measure them.
+  useEffect(() => {
+    const unknown = sources.filter((x) => x.width <= 0 || x.height <= 0);
+    if (unknown.length === 0) return;
+    let live = true;
+    void Promise.all(
+      sources.map(async (x) =>
+        x.width > 0 && x.height > 0 ? x : { ...x, ...(await measureImage(x.uri)) },
+      ),
+    ).then((measured) => {
+      if (live) setSources(measured);
+    });
+    return () => {
+      live = false;
+    };
+  }, [sources]);
 
   const multi = sources.length > 1;
   const effectiveFormat: Format = multi ? 'pdf' : format;
@@ -130,12 +146,11 @@ export function ConvertScreen({
     }
   };
 
-  const saveToPhotos = async () => {
+  const saveImage = async () => {
     if (!result || effectiveFormat === 'pdf') return;
-    const perm = await MediaLibrary.requestPermissionsAsync();
-    if (!perm.granted) return;
-    await MediaLibrary.saveToLibraryAsync(result.uri);
-    notify('Saved to Photos');
+    const problem = await saveToPhotos(result.uri);
+    if (problem) setError(problem);
+    else notify('Saved to Photos');
   };
 
   const first = sources[0];
@@ -164,7 +179,10 @@ export function ConvertScreen({
             { id: 'pdf', label: 'PDF' },
           ]}
           value={format}
-          onChange={setFormat}
+          onChange={(f) => {
+            setFormat(f);
+            setResult(null);
+          }}
         />
       )}
       {first && (
@@ -194,7 +212,7 @@ export function ConvertScreen({
             }
           />
           {effectiveFormat !== 'pdf' && (
-            <GhostButton label="Save to Photos" onPress={saveToPhotos} />
+            <GhostButton label="Save to Photos" onPress={() => void saveImage()} />
           )}
         </Card>
       )}

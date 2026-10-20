@@ -1,0 +1,28 @@
+appId: app.everytool.ios
+name: Long screenshot from three shared screenshots - stitch, save, share
+---
+- openLink: "everytool://tool/stitch"
+- tapOn:
+    text: "Open"
+    optional: true
+- extendedWaitUntil:
+    visible: "Stitch 3 shots"
+    timeout: 20000
+- tapOn: "Stitch 3 shots"
+- extendedWaitUntil:
+    visible: "Your long screenshot"
+    timeout: 180000
+- assertVisible: "1170 × 4332 px.*"
+- takeScreenshot: 10-stitch-photos
+- tapOn: "Save to Photos"
+- extendedWaitUntil:
+    visible: "Saved to Photos"
+    timeout: 20000
+- tapOn: "Share image"
+- extendedWaitUntil:
+    visible: "Save Image|Save to Files|Copy"
+    timeout: 15000
+- takeScreenshot: 10-stitch-share-sheet
+- tapOn:
+    text: "Close"
+    optional: true

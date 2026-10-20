@@ -5,6 +5,8 @@ export interface SharedVaultNative {
   writeStateJson(groupId: string, json: string): boolean;
   groupContainerUri(groupId: string): string | null;
   takePendingTool(groupId: string): string | null;
+  showBroadcastPicker(extensionBundleId: string): Promise<boolean>;
+  requestNotificationPermission(): Promise<boolean>;
 }
 
 export default requireNativeModule<SharedVaultNative>('EverytoolSharedVault');

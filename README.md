@@ -12,8 +12,8 @@ team `8H56KM6SCW`, scheme `everytool`.
 
 | Tool | What it does |
 | --- | --- |
-| Long screenshot | Stitch a screen recording's frames (primary) or picked overlapping photos (secondary). Always normalized to ≤1170px wide, output height capped at 8192px; seams with no overlap are reported, never silently stacked. |
-| Clipboard | Local clipboard vault: save, pin, tap to copy. Shared with the keyboard via the App Group. |
+| Long screenshot | Tap Record (or the Record Long Screenshot control), scroll as long as you like, stop — Everytool stitches automatically. Also from picked overlapping screenshots. ≤1170px wide, **no height limit** (rows stream into a compressed PNG); fixed bars appear once; seams with no overlap are reported. Save to Photos, Share, Copy. |
+| Clipboard | Clipboard vault: save, paste, copy, cut, edit, pin, share, search, delete, clear. Same vault as the keyboard (App Group), edits flow both ways. |
 | Convert | Image → JPG / PNG / PDF; several photos → one PDF. |
 | QR toolbox | Make QR codes (text, Wi-Fi, contact), scan from camera or from a photo, made/scanned history. |
 | Resize photo | Target width + quality, before/after byte sizes. |
@@ -28,23 +28,27 @@ team `8H56KM6SCW`, scheme `everytool`.
 All under `targets/`; bundle IDs derive from `app.everytool.ios`.
 
 - **keyboard** (`.keyboard`) — `KeyboardViewController.swift`: a real QWERTY
-  keyboard (symbols page, shift, delete-repeat, globe key) that types with
-  Full Access OFF. Tabs inside: Clipboard (the shared vault, tap to insert
-  via `textDocumentProxy`) and Text tools (counts + extraction over the text
+  keyboard (two symbol pages, shift + caps lock, delete-repeat, cursor keys,
+  globe key) that types with Full Access OFF. Tabs inside: Clipboard — a
+  full manager (Paste / Copy / Cut / Save / New / Clear on the field; per
+  clip insert, copy, edit, pin, delete; edits typed with the keyboard's own
+  keys) — and Text tools (counts + extraction over the text
   around the cursor; line transforms capped at 1500 chars). Open Access is
   requested for the pasteboard + App Group only; there is no network code.
-- **controls** (`.widget`, WidgetKit) — three iOS 18 Control Center controls
-  (Stitch / Convert / QR). Each runs `OpenToolIntent`, which records the tool
-  in the App Group; the app consumes it on activation (`takePendingTool`).
-  A control is a door, not the tool — stated in the code.
+- **controls** (`.widget`, WidgetKit) — eleven iOS 18 Control Center
+  controls: one per tool plus Record Long Screenshot. Each runs
+  `OpenToolIntent` (compiled into the extension AND the app target via
+  `plugins/withOpenToolIntent.js`), which records the tool in the App Group;
+  the app consumes it on activation (`takePendingTool`).
 - **share** (`.share`) — SwiftUI share sheet for images (≤20), PDFs and text,
   routed to stitch / convert / resize / PDF tools / clipboard. Files are
   copied into the App Group `ShareInbox/` with an `index.json`; the app
   drains it on launch and routes by the first item's tool.
 - **broadcast** (`.broadcast`) — `SampleHandler.swift`: ReplayKit upload
-  extension. Samples ~1 frame/sec, scales to ≤1170px wide, writes PNG frames
-  to the App Group `BroadcastInbox/`; flags `finished` when the broadcast
-  ends. The app stitches the frames on next launch.
+  extension. Samples every 0.4 s, skips unchanged frames, scales to ≤1170px
+  wide, writes PNG frames to the App Group `BroadcastInbox/`; flags
+  `finished` and posts a "ready" notification when the broadcast ends. The
+  app opens the stitcher and stitches automatically.
 - **broadcastui** (`.broadcastui`) — the setup screen shown in Apple's
   broadcast picker; instructions only. Starting/stopping is always Apple's
   own recording UI.
@@ -53,6 +57,8 @@ All under `targets/`; bundle IDs derive from `app.everytool.ios`.
   (key `everytool.state.v1`), plus both inboxes. The app reaches the same
   store through the local Expo module in `modules/shared-vault/`
   (with an AsyncStorage fallback when the module is absent, e.g. Expo Go).
+  The module is linked through `modules/shared-vault/ios/EverytoolSharedVault.podspec`
+  — without a podspec autolinking skips it silently.
 
 ## Code map
 
@@ -67,10 +73,12 @@ src/lib/dates.ts         Calendar math (clamped month advancement)
 src/lib/money.ts         Integer-cent bill splitting
 src/lib/text.ts          Counts, extraction (deduped), line cleanup
 src/lib/pages.ts         PDF page-range parsing ("1-3,5")
-src/lib/stitchMath.ts    Stitch plan: width normalization, height cap
+src/lib/stitchMath.ts    Width normalization (no height cap)
+src/lib/stitchCore.ts    Stitch engine: header/footer, duplicates, seams, segments
+src/lib/clips.ts         Clipboard vault operations (pure, tested)
 src/lib/deflate.ts       Pure DEFLATE decoder + streaming stored-block
                          PNG writer (no native codec dependency)
-src/lib/stitch.ts        Streaming stitcher (row-at-a-time, FileHandle)
+src/lib/stitch.ts        On-device stitch: native downscale for matching, streamed PNG out
 src/lib/qrpayload.ts     Wi-Fi / vCard QR payload builders
 src/lib/pdf.ts           pdf-lib merge / extract / compress
 src/lib/gifenc.ts        Pure GIF89a encoder (fixed palette, LZW)
@@ -83,33 +91,32 @@ src/components/ui.tsx    ToolShell, cards, buttons, segmented, glyphs
 tests/                   Node smoke tests for the pure logic
 ```
 
-## Verification (all run, all green)
+## Verification
 
-- `npx tsc --noEmit` — clean
-- `npx eslint .` — clean
-- `npm test` — 30/30 (days incl. month-end clamping, split-bill exact cents,
-  text extraction dedupe, stitch caps, page specs, QR payloads, PNG
-  roundtrip via the app's own writer/decoder, GIF LZW roundtrip)
-- `npx expo export --platform ios` — succeeds
-- `npx expo prebuild -p ios` in a scratch copy — generates all five extension
-  targets (EverytoolKeyboard, EverytoolControls, EverytoolShare,
-  EverytoolBroadcast, EverytoolBroadcastUI) with bundle IDs
-  `app.everytool.ios.*`, the App Group entitlement on app + keyboard +
-  share + controls + broadcast, the hand-written keyboard/share Info.plists
-  preserved (`RequestsOpenAccess`, activation rule), and `SharedVault.swift`
-  referenced by every target. Scratch deleted afterwards.
-
-The test suite caught one real bug during the build: `PngStreamWriter`
-folded the zlib header into the first stored block's payload, making its
-own PNGs undecodable. Fixed; the roundtrip tests pin it.
+- `npx tsc --noEmit`, `npx eslint .`, `npm test` (48 tests, incl. pixel-exact
+  stitch tests) — see AUDIT.md.
+- iPhone simulator: `.github/workflows/ios-simulator-tests.yml` builds for the
+  simulator, boots an iPhone, installs, and runs the Maestro suite in
+  `.maestro/` via `scripts/sim/run-e2e.sh`. Locally on a Mac:
+  ```
+  npx expo prebuild -p ios --clean
+  xcodebuild -workspace ios/Everytool.xcworkspace -scheme Everytool \
+    -configuration Release -sdk iphonesimulator -derivedDataPath build/sim \
+    CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= build
+  xcrun simctl install booted build/sim/Build/Products/Release-iphonesimulator/Everytool.app
+  node --experimental-strip-types scripts/sim/make-fixtures.ts sim-fixtures
+  UDID=$(xcrun simctl list devices booted -j | python3 -c 'import json,sys;print([d["udid"] for r in json.load(sys.stdin)["devices"].values() for d in r][0])') \
+    FX=sim-fixtures scripts/sim/run-e2e.sh
+  ```
 
 ## Honest limits and stubs
 
-- **Broadcast stitching fidelity is approximate.** Sample buffers carry no
-  scroll metadata; the app estimates each seam's overlap by matching frame
-  content in a bounded strip search. Slow, steady scrolling stitches well;
-  fast jumps produce a seam the UI reports ("stacked — no overlap found")
-  instead of hiding it. Sampling is ~1 fps by design (1170px-wide PNGs).
+- **Stitching needs overlap.** Sample buffers carry no scroll metadata; the
+  app matches frame content at full row precision. Frames are sampled every
+  0.4 s, so normal scrolling overlaps; a fling that moves more than a
+  screen between samples produces a seam the UI reports ("stacked")
+  instead of hiding it. Very long images (tens of thousands of px) are
+  fine to Share/Save to Files; Photos may display them downscaled.
 - **PDF "compress"** is an object-stream re-save via pdf-lib. It shrinks
   PDFs with uncompressed or redundant structure; it does NOT re-encode
   embedded images, and the UI says "may not shrink image-heavy PDFs".

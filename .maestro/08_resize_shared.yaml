@@ -1,0 +1,19 @@
+appId: app.everytool.ios
+name: Resize - shared photo is measured and shrunk
+---
+- openLink: "everytool://tool/resize"
+- tapOn:
+    text: "Open"
+    optional: true
+- extendedWaitUntil:
+    visible: "2400 × 1800.*"
+    timeout: 20000
+- tapOn: "Resize"
+- extendedWaitUntil:
+    visible: "1080 × 810.*"
+    timeout: 30000
+- tapOn: "Save to Photos"
+- extendedWaitUntil:
+    visible: "Saved to Photos"
+    timeout: 15000
+- takeScreenshot: 08-resize

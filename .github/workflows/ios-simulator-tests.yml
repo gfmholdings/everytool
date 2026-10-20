@@ -1,0 +1,132 @@
+name: iOS — Simulator regression
+
+# Builds Everytool (app + keyboard, controls, share, broadcast extensions)
+# for the iPhone simulator, installs it on a booted iPhone, and runs the
+# Maestro regression suite in .maestro/ through scripts/sim/run-e2e.sh.
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  EXPO_NO_TELEMETRY: "1"
+
+jobs:
+  unit:
+    name: Typecheck, lint, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm }
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx eslint .
+      - run: npm test
+
+  simulator:
+    name: Build + run on iPhone simulator
+    needs: unit
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm }
+      - run: npm ci
+
+      - name: Select newest Xcode
+        run: |
+          set -euo pipefail
+          LATEST_XCODE="$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)"
+          sudo xcode-select -s "$LATEST_XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Prebuild iOS project
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Verify native wiring
+        run: |
+          set -euo pipefail
+          grep -q "EverytoolSharedVault" ios/Podfile.lock || { echo "::error::EverytoolSharedVault module is not linked"; exit 1; }
+          grep -q "OpenToolIntent.swift in Sources" ios/Everytool.xcodeproj/project.pbxproj || { echo "::error::OpenToolIntent is not in the app target"; exit 1; }
+
+      - name: Pick and boot an iPhone simulator
+        run: |
+          set -euo pipefail
+          UDID="$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          d = json.load(sys.stdin)["devices"]
+          c = [(rt, x) for rt, xs in d.items() if "iOS" in rt for x in xs if x["name"].startswith("iPhone")]
+          pro = [t for t in c if "Pro" in t[1]["name"] and "Max" not in t[1]["name"]] or c
+          pro.sort(key=lambda t: (t[0], t[1]["name"]))
+          print(pro[-1][1]["udid"])')"
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          # Software keyboard on, so the Everytool keyboard can show.
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl list devices | grep "$UDID"
+
+      - name: Build for simulator
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -workspace ios/Everytool.xcworkspace \
+            -scheme Everytool \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination "id=$UDID" \
+            -derivedDataPath build/sim \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= \
+            PROVISIONING_PROFILE_SPECIFIER= \
+            build | tee build/xcodebuild.log | grep -E "error:|warning: .*Everytool|BUILD (SUCCEEDED|FAILED)" || true
+          grep -q "BUILD SUCCEEDED" build/xcodebuild.log
+
+      - name: Verify bundle (extensions + 11 controls)
+        run: |
+          set -euo pipefail
+          APP="build/sim/Build/Products/Release-iphonesimulator/Everytool.app"
+          echo "APP=$APP" >> "$GITHUB_ENV"
+          ls "$APP/PlugIns"
+          for ext in EverytoolKeyboard EverytoolControls EverytoolShare EverytoolBroadcast EverytoolBroadcastUI; do
+            test -d "$APP/PlugIns/$ext.appex" || { echo "::error::$ext.appex missing"; exit 1; }
+          done
+          BIN="$APP/PlugIns/EverytoolControls.appex/EverytoolControls"
+          # The ten tool controls share one interpolated kind
+          # ("app.everytool.ios.controls.<tool>"); the record control's
+          # kind is a literal. Both must be in the binary.
+          strings "$BIN" | grep -q "app.everytool.ios.controls.record"
+          strings "$BIN" | grep -q "app.everytool.ios.controls."
+          for t in "Long Screenshot" "Clipboard" "Convert" "Resize Photo" "PDF Tools" "Text Tools" "Days Counter" "Split Bill" "Video to GIF"; do
+            strings "$BIN" | grep -q "$t" || { echo "::error::control '$t' missing"; exit 1; }
+          done
+          echo "All Control Center controls present."
+
+      - name: Install app, grant photo access, add media
+        run: |
+          set -euo pipefail
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl privacy "$UDID" grant photos app.everytool.ios || true
+          xcrun simctl privacy "$UDID" grant photos-add app.everytool.ios || true
+          node --experimental-strip-types scripts/sim/make-fixtures.ts sim-fixtures
+          xcrun simctl addmedia "$UDID" sim-fixtures/photo.png sim-fixtures/shots/*.png
+
+      - name: Install Maestro
+        run: |
+          curl -fsSL "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Run regression suite
+        run: FX=sim-fixtures OUT=build/e2e scripts/sim/run-e2e.sh
+
+      - name: Upload results (screenshots, JUnit, logs)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-e2e
+          path: |
+            build/e2e
+            build/xcodebuild.log
+          if-no-files-found: ignore

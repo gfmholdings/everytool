@@ -1,0 +1,26 @@
+appId: app.everytool.ios
+name: PDF tools - shared PDF, split pages, compress
+---
+- openLink: "everytool://tool/pdf"
+- tapOn:
+    text: "Open"
+    optional: true
+- extendedWaitUntil:
+    visible: "3 pages"
+    timeout: 20000
+- tapOn: "Split"
+- tapOn: "Pages to keep.*"
+- inputText: "1-2"
+- hideKeyboard
+- tapOn: "Make the split PDF"
+- extendedWaitUntil:
+    visible: "2 pages · .*"
+    timeout: 20000
+- tapOn: "Compress"
+- tapOn:
+    text: "Compress"
+    index: 1
+- extendedWaitUntil:
+    visible: "3 pages · .*"
+    timeout: 20000
+- takeScreenshot: 09-pdf

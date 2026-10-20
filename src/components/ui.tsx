@@ -30,15 +30,19 @@ export function PrimaryButton({
   onPress,
   disabled,
   orange,
+  testID,
 }: {
   label: string;
   onPress: () => void;
   disabled?: boolean;
   orange?: boolean;
+  testID?: string;
 }) {
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={label}
+      testID={testID}
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
@@ -56,13 +60,17 @@ export function PrimaryButton({
 export function GhostButton({
   label,
   onPress,
+  testID,
 }: {
   label: string;
   onPress: () => void;
+  testID?: string;
 }) {
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={label}
+      testID={testID}
       onPress={onPress}
       style={({ pressed }) => [styles.ghost, pressed && { opacity: 0.6 }]}
     >
@@ -112,16 +120,24 @@ export function Field({
   keyboard,
   multiline,
   mono,
+  testID,
+  secure,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
-  keyboard?: 'decimal-pad' | 'number-pad' | 'default';
+  keyboard?: 'decimal-pad' | 'number-pad' | 'phone-pad' | 'email-address' | 'default';
   multiline?: boolean;
   mono?: boolean;
+  testID?: string;
+  secure?: boolean;
 }) {
   return (
     <TextInput
+      testID={testID}
+      accessibilityLabel={placeholder}
+      secureTextEntry={secure}
+      autoCapitalize={keyboard === 'email-address' ? 'none' : undefined}
       value={value}
       onChangeText={onChange}
       placeholder={placeholder}

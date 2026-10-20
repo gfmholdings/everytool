@@ -1,11 +1,10 @@
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
-import * as MediaLibrary from 'expo-media-library';
 import { useState } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 
 import { Card, PrimaryButton, ToolShell } from '../components/ui';
-import { formatBytes, shareFile } from '../lib/files';
+import { formatBytes, saveToPhotos, shareFile } from '../lib/files';
 import { GIF_WIDTH, makeGifFromVideo, type GifResult } from '../lib/gif';
 import { colors, type } from '../theme';
 
@@ -76,10 +75,9 @@ export function GifScreen({
 
   const save = async () => {
     if (!result) return;
-    const perm = await MediaLibrary.requestPermissionsAsync();
-    if (!perm.granted) return;
-    await MediaLibrary.saveToLibraryAsync(result.uri);
-    notify('Saved to Photos');
+    const problem = await saveToPhotos(result.uri);
+    if (problem) setError(problem);
+    else notify('Saved to Photos');
   };
 
   return (

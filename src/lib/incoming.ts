@@ -69,34 +69,40 @@ export async function drainShareInbox(): Promise<
   }
 }
 
-export async function drainBroadcastInbox(): Promise<
-  { uri: string; width: number; height: number }[]
-> {
+export interface BroadcastInbox {
+  frames: { uri: string; width: number; height: number }[];
+  /** The recording has stopped (the extension flagged the index). */
+  finished: boolean;
+}
+
+/**
+ * The frames a screen recording left in the App Group, in capture order.
+ * Frames stay in place (they are large) until clearBroadcastInbox().
+ */
+export async function readBroadcastInbox(): Promise<BroadcastInbox> {
+  const empty: BroadcastInbox = { frames: [], finished: false };
   const dir = inboxDir('BroadcastInbox');
-  if (!dir || !dir.exists) return [];
+  if (!dir || !dir.exists) return empty;
   const indexFile = new File(dir, 'index.json');
-  if (!indexFile.exists) return [];
+  if (!indexFile.exists) return empty;
   try {
     const raw = await indexFile.text();
-    const frames = parseInboxIndex(raw).items as BroadcastFrame[];
-    const out: {
-      uri: string;
-      width: number;
-      height: number;
-    }[] = [];
-    for (const frame of frames) {
+    const index = parseInboxIndex(raw);
+    const frames: BroadcastInbox['frames'] = [];
+    for (const frame of index.items as BroadcastFrame[]) {
       const src = new File(dir, frame.file);
       if (!src.exists) continue;
-      out.push({
-        uri: src.uri,
-        width: frame.width,
-        height: frame.height,
-      });
+      frames.push({ uri: src.uri, width: frame.width, height: frame.height });
     }
-    return out;
+    return { frames, finished: index.finished };
   } catch {
-    return [];
+    return empty;
   }
+}
+
+/** Back-compat: just the frames. */
+export async function drainBroadcastInbox(): Promise<BroadcastInbox['frames']> {
+  return (await readBroadcastInbox()).frames;
 }
 
 /** Clear the broadcast inbox after a successful stitch (frames are big). */

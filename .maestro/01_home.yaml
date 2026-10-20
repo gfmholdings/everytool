@@ -1,0 +1,18 @@
+appId: app.everytool.ios
+name: Home shows all ten tools
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Open Long screenshot"
+    timeout: 30000
+- assertVisible: "Open Clipboard"
+- assertVisible: "Open Convert"
+- assertVisible: "Open QR toolbox"
+- assertVisible: "Open Resize photo"
+- assertVisible: "Open PDF tools"
+- assertVisible: "Open Text tools"
+- assertVisible: "Open Days counter"
+- assertVisible: "Open Split bill"
+- scrollUntilVisible:
+    element: "Open Video to GIF"
+- takeScreenshot: 01-home

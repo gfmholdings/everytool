@@ -50,6 +50,102 @@ enum SharedVault {
     }
   }
 
+  // MARK: - Clip edits (keyboard)
+  //
+  // Read-modify-write of the one state document, preserving every key the
+  // extension doesn't own (qrHistory, future keys). The app re-reads this
+  // document whenever it activates and before each of its own writes, so
+  // edits made here are never clobbered. Clip shape matches src/types.ts:
+  // { id, text, pinned, createdAt (ms) }.
+
+  static let maxClips = 500
+
+  private static func writeState(_ dict: [String: Any]) -> Bool {
+    guard
+      let defaults = Self.defaults,
+      let data = try? JSONSerialization.data(withJSONObject: dict),
+      let json = String(data: data, encoding: .utf8)
+    else { return false }
+    defaults.set(json, forKey: stateKey)
+    return true
+  }
+
+  private static func mutateClips(
+    _ change: (inout [[String: Any]]) -> Void
+  ) -> Bool {
+    var dict = state()
+    var clips = dict["clips"] as? [[String: Any]] ?? []
+    change(&clips)
+    dict["clips"] = clips
+    if dict["qrHistory"] == nil { dict["qrHistory"] = [] as [Any] }
+    return writeState(dict)
+  }
+
+  private static func nowMs() -> Double {
+    (Date().timeIntervalSince1970 * 1000).rounded()
+  }
+
+  /// Saves text as a new clip. Saving text that is already in the vault
+  /// moves that clip to the top instead of duplicating it.
+  @discardableResult
+  static func saveClip(_ raw: String) -> Bool {
+    let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else { return false }
+    return mutateClips { clips in
+      if let i = clips.firstIndex(where: { ($0["text"] as? String) == text }) {
+        clips[i]["createdAt"] = nowMs()
+        return
+      }
+      let id = "\(Int(nowMs()))-kb\(UUID().uuidString.prefix(6).lowercased())"
+      clips.insert(
+        ["id": id, "text": text, "pinned": false, "createdAt": nowMs()],
+        at: 0
+      )
+      // Keep the vault bounded: drop the oldest unpinned clips.
+      while clips.count > maxClips,
+        let last = clips.lastIndex(where: { !(($0["pinned"] as? Bool) ?? false) })
+      {
+        clips.remove(at: last)
+      }
+    }
+  }
+
+  @discardableResult
+  static func updateClip(id: String, text raw: String) -> Bool {
+    let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else { return false }
+    return mutateClips { clips in
+      if let i = clips.firstIndex(where: { ($0["id"] as? String) == id }) {
+        clips[i]["text"] = text
+      }
+    }
+  }
+
+  @discardableResult
+  static func togglePin(id: String) -> Bool {
+    mutateClips { clips in
+      if let i = clips.firstIndex(where: { ($0["id"] as? String) == id }) {
+        let pinned = (clips[i]["pinned"] as? Bool) ?? false
+        clips[i]["pinned"] = !pinned
+      }
+    }
+  }
+
+  @discardableResult
+  static func deleteClip(id: String) -> Bool {
+    mutateClips { clips in
+      clips.removeAll { ($0["id"] as? String) == id }
+    }
+  }
+
+  /// Clears every unpinned clip; pinned ones stay.
+  @discardableResult
+  static func clearUnpinnedClips() -> Bool {
+    mutateClips { clips in
+      clips.removeAll { !(($0["pinned"] as? Bool) ?? false) }
+    }
+  }
+
   // MARK: - Share inbox
 
   /// Copy a shared file into ShareInbox and append its index entry.

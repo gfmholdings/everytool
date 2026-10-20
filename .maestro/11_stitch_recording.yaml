@@ -1,0 +1,27 @@
+appId: app.everytool.ios
+name: Long screenshot from a finished screen recording (auto-open + auto-stitch)
+---
+# The driver has written 8 frames + index.json {finished:true} into the
+# App Group's BroadcastInbox, exactly as targets/broadcast does. Bringing
+# the app to the foreground must open the stitcher and stitch by itself.
+- launchApp
+- extendedWaitUntil:
+    visible: "Your long screenshot"
+    timeout: 180000
+- assertVisible: "1170 × 6732 px.*"
+- assertVisible: "1 unchanged frames skipped.*"
+- takeScreenshot: 11-stitch-recording
+- tapOn: "View full length"
+- assertVisible: "1170 × 6732"
+- scroll
+- scroll
+- takeScreenshot: 11-stitch-full-length
+- tapOn: "Done"
+- tapOn: "Save to Photos"
+- extendedWaitUntil:
+    visible: "Saved to Photos"
+    timeout: 20000
+- tapOn: "Copy image"
+- extendedWaitUntil:
+    visible: "Copied"
+    timeout: 20000

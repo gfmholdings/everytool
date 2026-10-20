@@ -1,0 +1,16 @@
+appId: app.everytool.ios
+name: Text tools - counts, extraction, cleanup
+---
+- launchApp
+- tapOn: "Open Text tools"
+- tapOn: "Paste or type text"
+- inputText: "Mail me at ada@example.com or see https://example.org today"
+- hideKeyboard
+- assertVisible: "8"
+- tapOn: "Links"
+- assertVisible: "https://example.org"
+- tapOn: "Emails"
+- assertVisible: "ada@example.com"
+- tapOn: "Save to clipboard"
+- assertVisible: "Saved to clipboard history"
+- takeScreenshot: 04-text

@@ -1,0 +1,11 @@
+appId: app.everytool.ios
+---
+- openLink: "everytool://tool/${TOOL}"
+- tapOn:
+    text: "Open"
+    optional: true
+- extendedWaitUntil:
+    visible: "${TITLE}"
+    timeout: 15000
+- takeScreenshot: "02-tool-${TOOL}"
+- tapOn: "Back"

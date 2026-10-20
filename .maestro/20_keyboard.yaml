@@ -1,0 +1,38 @@
+appId: app.everytool.ios
+name: Everytool keyboard - enable, Full Access, clipboard tab inserts a saved clip
+# Drives the iOS Settings UI, whose labels shift between iOS releases;
+# the workflow runs this flow as a separate, non-blocking step.
+---
+- launchApp:
+    appId: com.apple.Preferences
+- tapOn: "General"
+- scrollUntilVisible:
+    element: "Keyboard"
+- tapOn: "Keyboard"
+- tapOn: "Keyboards"
+- tapOn: "Add New Keyboard.*"
+- scrollUntilVisible:
+    element: "Everytool"
+- tapOn: "Everytool"
+- tapOn: "Everytool.*"
+- tapOn: "Allow Full Access"
+- tapOn:
+    text: "Allow"
+    optional: true
+- launchApp:
+    appId: app.everytool.ios
+- tapOn: "Open Text tools"
+- tapOn: "Paste or type text"
+- tapOn:
+    text: "Next keyboard"
+    optional: true
+- tapOn:
+    id: "kb.tab.Clipboard"
+- assertVisible: "Paste"
+- assertVisible: "Saved · tap to insert"
+- takeScreenshot: 20-keyboard-clipboard
+- tapOn: "Maestro clip edited"
+- tapOn:
+    id: "kb.tab.Text tools"
+- assertVisible: ".*words.*characters.*"
+- takeScreenshot: 20-keyboard-text

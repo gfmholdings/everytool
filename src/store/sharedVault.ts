@@ -1,24 +1,33 @@
 import { requireOptionalNativeModule } from 'expo-modules-core';
 
-import { APP_GROUP_ID } from '../config';
+import { APP_GROUP_ID, BROADCAST_EXTENSION_ID } from '../config';
 import type { AppState } from '../types';
 
 /**
  * The shared vault lives in the App Group container so the app, the
  * keyboard extension, the share extension and the broadcast extension all
- * read the same clipboard + QR history. The native side is a tiny module
- * (modules/shared-vault) wrapping UserDefaults(suiteName:) with a JSON
- * document, exactly mirroring the Swift `SharedVault` the extensions use.
+ * read the same clipboard + QR history. The native side is the local Expo
+ * module in modules/shared-vault (linked through its podspec), wrapping
+ * UserDefaults(suiteName:) with one JSON document, exactly mirroring the
+ * Swift `SharedVault` the extensions compile.
  *
- * When the native module is absent (Expo Go), reads fall back to an
- * in-memory empty state and writes are dropped silently — data features
- * need a native build, which is also the only place the extensions exist.
+ * When the native module is absent (Expo Go), reads return null and
+ * writes are dropped — AppStore keeps an AsyncStorage copy instead.
  */
 interface SharedVaultNative {
   readStateJson(groupId: string): string | null;
   writeStateJson(groupId: string, json: string): boolean;
   groupContainerUri(groupId: string): string | null;
   takePendingTool(groupId: string): string | null;
+  showBroadcastPicker?(extensionBundleId: string): Promise<boolean>;
+  requestNotificationPermission?(): Promise<boolean>;
+}
+
+const native =
+  requireOptionalNativeModule<SharedVaultNative>('EverytoolSharedVault');
+
+export function sharedVaultAvailable(): boolean {
+  return native != null;
 }
 
 /**
@@ -45,23 +54,25 @@ export function groupContainerUri(): string | null {
   }
 }
 
-const native =
-  requireOptionalNativeModule<SharedVaultNative>('EverytoolSharedVault');
-
-export function sharedVaultAvailable(): boolean {
-  return native != null;
+export function parseState(json: string | null | undefined): AppState | null {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json) as Partial<AppState>;
+    return {
+      clips: Array.isArray(parsed.clips)
+        ? parsed.clips.filter((c) => c && typeof c.text === 'string' && typeof c.id === 'string')
+        : [],
+      qrHistory: Array.isArray(parsed.qrHistory) ? parsed.qrHistory : [],
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function readSharedState(): AppState | null {
   if (!native) return null;
   try {
-    const json = native.readStateJson(APP_GROUP_ID);
-    if (!json) return null;
-    const parsed = JSON.parse(json) as Partial<AppState>;
-    return {
-      clips: Array.isArray(parsed.clips) ? parsed.clips : [],
-      qrHistory: Array.isArray(parsed.qrHistory) ? parsed.qrHistory : [],
-    };
+    return parseState(native.readStateJson(APP_GROUP_ID));
   } catch {
     return null;
   }
@@ -72,7 +83,29 @@ export function writeSharedState(state: AppState): void {
   try {
     native.writeStateJson(APP_GROUP_ID, JSON.stringify(state));
   } catch {
-    // Best effort: the vault is a convenience cache of the user's own
-    // clips; a failed write must never crash a tool.
+    // Best effort: a failed write must never crash a tool.
+  }
+}
+
+/**
+ * Raise Apple's screen-broadcast sheet with Everytool preselected.
+ * Resolves false when it can't be shown (Expo Go / no window).
+ */
+export async function showBroadcastPicker(): Promise<boolean> {
+  if (!native?.showBroadcastPicker) return false;
+  try {
+    return await native.showBroadcastPicker(BROADCAST_EXTENSION_ID);
+  } catch {
+    return false;
+  }
+}
+
+/** Ask once so the broadcast extension can say "ready" when it stops. */
+export async function requestNotificationPermission(): Promise<boolean> {
+  if (!native?.requestNotificationPermission) return false;
+  try {
+    return await native.requestNotificationPermission();
+  } catch {
+    return false;
   }
 }

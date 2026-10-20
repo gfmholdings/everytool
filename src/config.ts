@@ -7,3 +7,6 @@ export const APP_GROUP_ID = 'group.app.everytool.ios';
 /** Deep-link scheme: everytool://tool/<id> opens a tool from Control
  *  Center, the share extension, or the broadcast extension. */
 export const SCHEME = 'everytool';
+
+/** Bundle id of the ReplayKit broadcast upload extension (targets/broadcast). */
+export const BROADCAST_EXTENSION_ID = 'app.everytool.ios.broadcast';

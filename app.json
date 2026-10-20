@@ -62,46 +62,6 @@
                       "group.app.everytool.ios"
                     ]
                   }
-                },
-                {
-                  "bundleIdentifier": "app.everytool.ios.share",
-                  "targetName": "EverytoolShare",
-                  "entitlements": {
-                    "com.apple.security.application-groups": [
-                      "group.app.everytool.ios"
-                    ]
-                  }
-                },
-                {
-                  "bundleIdentifier": "app.everytool.ios.keyboard",
-                  "targetName": "EverytoolKeyboard",
-                  "entitlements": {
-                    "com.apple.security.application-groups": [
-                      "group.app.everytool.ios"
-                    ]
-                  }
-                },
-                {
-                  "bundleIdentifier": "app.everytool.ios.widget",
-                  "targetName": "EverytoolControls",
-                  "entitlements": {
-                    "com.apple.security.application-groups": [
-                      "group.app.everytool.ios"
-                    ]
-                  }
-                },
-                {
-                  "bundleIdentifier": "app.everytool.ios.broadcastui",
-                  "targetName": "EverytoolBroadcastUI"
-                },
-                {
-                  "bundleIdentifier": "app.everytool.ios.broadcast",
-                  "targetName": "EverytoolBroadcast",
-                  "entitlements": {
-                    "com.apple.security.application-groups": [
-                      "group.app.everytool.ios"
-                    ]
-                  }
                 }
               ]
             }
@@ -123,7 +83,7 @@
         "NSCameraUsageDescription": "Everytool uses the camera to scan QR codes. Nothing leaves your phone.",
         "NSMicrophoneUsageDescription": "Everytool never records audio. This is only requested if you start a screen recording that includes sound.",
         "NSPhotoLibraryAddUsageDescription": "Everytool saves finished screenshots, images and GIFs to your photo library.",
-        "NSPhotoLibraryUsageDescription": "Everytool reads the photos you pick so it can stitch, convert, resize and make GIFs \u2014 all on this phone.",
+        "NSPhotoLibraryUsageDescription": "Everytool reads the photos you pick so it can stitch, convert, resize and make GIFs — all on this phone.",
         "ITSAppUsesNonExemptEncryption": false
       },
       "supportsTablet": false
@@ -137,7 +97,8 @@
       "expo-image-picker",
       "expo-camera",
       "expo-media-library",
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "./plugins/withOpenToolIntent.js"
     ],
     "runtimeVersion": {
       "policy": "sdkVersion"

@@ -1,12 +1,11 @@
 import { File } from 'expo-file-system';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
-import * as MediaLibrary from 'expo-media-library';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 
 import { Card, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
-import { formatBytes, shareFile, tempFileUri } from '../lib/files';
+import { formatBytes, measureImage, saveToPhotos, shareFile, tempFileUri } from '../lib/files';
 import { colors, type } from '../theme';
 
 const WIDTHS = [640, 828, 1080, 1170, 1600] as const;
@@ -48,14 +47,29 @@ export function ResizeScreen({
   const [error, setError] = useState<string | null>(null);
 
   const loadSource = async (uri: string, w: number, h: number) => {
+    // Shared files arrive without a size; measure so the width chips and
+    // the resize target are right.
+    const size = w > 0 && h > 0 ? { width: w, height: h } : await measureImage(uri);
     const info = new File(uri);
-    setSource({ uri, width: w, height: h, bytes: info.size ?? 0 });
+    setSource({ uri, width: size.width, height: size.height, bytes: info.size ?? 0 });
+    // Default to the largest preset that actually shrinks the photo.
+    const fit = WIDTHS.reduce((best, wd, i) => (wd < size.width ? i : best), 0);
+    setWidthIdx(Math.min(2, fit));
     setResult(null);
   };
 
-  if (initialSource && !source) {
-    void loadSource(initialSource.uri, initialSource.width, initialSource.height);
-  }
+  useEffect(() => {
+    if (!initialSource) return;
+    let live = true;
+    const t = setTimeout(() => {
+      if (live) void loadSource(initialSource.uri, initialSource.width, initialSource.height);
+    }, 0);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSource?.uri]);
 
   const pick = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -104,10 +118,9 @@ export function ResizeScreen({
 
   const save = async () => {
     if (!result) return;
-    const perm = await MediaLibrary.requestPermissionsAsync();
-    if (!perm.granted) return;
-    await MediaLibrary.saveToLibraryAsync(result.uri);
-    notify('Saved to Photos');
+    const problem = await saveToPhotos(result.uri);
+    if (problem) setError(problem);
+    else notify('Saved to Photos');
   };
 
   return (
@@ -137,7 +150,10 @@ export function ResizeScreen({
                   label={`${w}`}
                   active={active}
                   disabled={disabled}
-                  onPress={() => setWidthIdx(i)}
+                  onPress={() => {
+                    setWidthIdx(i);
+                    setResult(null);
+                  }}
                 />
               );
             })}

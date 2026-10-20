@@ -7,3 +7,7 @@ web-build/
 
 credentials.json
 credentials/
+
+# simulator test fixtures / outputs
+sim-fixtures/
+build/

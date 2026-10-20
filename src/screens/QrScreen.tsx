@@ -1,11 +1,13 @@
 import { CameraView, scanFromURLAsync, useCameraPermissions } from 'expo-camera';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
+import { File } from 'expo-file-system';
 import { useRef, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
 import { Card, Field, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
+import { saveToPhotos, shareFile, tempFileUri } from '../lib/files';
 import { describePayload, wifiPayload, contactPayload, type WifiSecurity } from '../lib/qrpayload';
 import { useStore } from '../store/AppStore';
 import { colors, type } from '../theme';
@@ -31,6 +33,23 @@ export function QrScreen({
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [made, setMade] = useState<string | null>(null);
+  const qrRef = useRef<{ toDataURL: (cb: (b64: string) => void) => void } | null>(null);
+
+  /** Render the shown QR to a PNG file (white margin, 1024 px). */
+  const qrFile = (): Promise<string | null> =>
+    new Promise((resolve) => {
+      const svg = qrRef.current;
+      if (!svg) return resolve(null);
+      svg.toDataURL((b64) => {
+        try {
+          const uri = tempFileUri('png', 'qr');
+          new File(uri).write(b64, { encoding: 'base64' });
+          resolve(uri);
+        } catch {
+          resolve(null);
+        }
+      });
+    });
 
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = useState(false);
@@ -131,7 +150,7 @@ export function QrScreen({
           {kind === 'wifi' && (
             <>
               <Field value={ssid} onChange={setSsid} placeholder="Network name" />
-              <Field value={password} onChange={setPassword} placeholder="Password" />
+              <Field value={password} onChange={setPassword} placeholder="Password" secure />
               <Segmented
                 options={[
                   { id: 'WPA' as WifiSecurity, label: 'WPA' },
@@ -146,17 +165,53 @@ export function QrScreen({
           {kind === 'contact' && (
             <>
               <Field value={name} onChange={setName} placeholder="Name" />
-              <Field value={phone} onChange={setPhone} placeholder="Phone (optional)" keyboard="default" />
-              <Field value={email} onChange={setEmail} placeholder="Email (optional)" />
+              <Field value={phone} onChange={setPhone} placeholder="Phone (optional)" keyboard="phone-pad" />
+              <Field value={email} onChange={setEmail} placeholder="Email (optional)" keyboard="email-address" />
             </>
           )}
           <PrimaryButton label="Make QR code" onPress={make} disabled={!buildPayload()} />
           {made && (
             <Card style={styles.qrCard}>
-              <QRCode value={made} size={220} />
+              <QRCode
+                value={made}
+                size={220}
+                quietZone={16}
+                getRef={(c: { toDataURL: (cb: (b64: string) => void) => void } | null) => {
+                  qrRef.current = c;
+                }}
+              />
               <Text style={[type.small, styles.center]} numberOfLines={2}>
                 {made}
               </Text>
+              <View style={styles.qrActions}>
+                <View style={styles.half}>
+                  <PrimaryButton
+                    label="Share"
+                    onPress={async () => {
+                      const uri = await qrFile();
+                      if (uri) await shareFile(uri, 'image/png');
+                      else notify('Couldn’t render the QR code');
+                    }}
+                  />
+                </View>
+                <View style={styles.half}>
+                  <GhostButton
+                    label="Save to Photos"
+                    onPress={async () => {
+                      const uri = await qrFile();
+                      if (!uri) return notify('Couldn’t render the QR code');
+                      const problem = await saveToPhotos(uri);
+                      notify(problem ?? 'Saved to Photos');
+                    }}
+                  />
+                </View>
+              </View>
+              <GhostButton
+                label="Copy text"
+                onPress={() =>
+                  void Clipboard.setStringAsync(made).then(() => notify('Copied'))
+                }
+              />
             </Card>
           )}
         </>
@@ -254,6 +309,8 @@ export function QrScreen({
 
 const styles = StyleSheet.create({
   qrCard: { alignItems: 'center', gap: 12, paddingVertical: 24 },
+  qrActions: { flexDirection: 'row', gap: 10, alignSelf: 'stretch', alignItems: 'center' },
+  half: { flex: 1 },
   center: { textAlign: 'center' },
   cameraWrap: { gap: 8 },
   camera: { width: '100%', height: 340, borderRadius: 16, overflow: 'hidden' },
