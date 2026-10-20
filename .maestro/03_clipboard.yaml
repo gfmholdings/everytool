@@ -24,8 +24,12 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
 - inputText: "Maestro clip edited"
 # No hideKeyboard: it fails on this screen. The Save button sits
 # directly under the edit field, which iOS auto-scrolls above the
-# keyboard when the field is focused — tap Save directly.
-- tapOn: "Save"
+# keyboard when the field is focused — tap Save directly. Anchored:
+# bare "Save" also matches the compose button "Save text" earlier in
+# the hierarchy, and run 39365940718 died here on exactly that — the
+# tap went to the (disabled) compose button and "Clip updated" never
+# appeared.
+- tapOn: "^Save$"
 - extendedWaitUntil:
     visible: "Clip updated"
     timeout: 20000

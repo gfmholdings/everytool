@@ -6,12 +6,14 @@ name: QR - make, copy, share sheet, history
 - tapOn:
     id: "qr.text"
 - inputText: "https://example.com/everytool"
-# hideKeyboard issued immediately after inputText failed here and in
-# 03/09; the one success (04) came after intervening interactions,
-# i.e. a settled keyboard. Settle first, then hide. (No plain-text
-# dismissal target exists on this tab — only Segmented pressables.)
-- waitForAnimationToEnd
-- hideKeyboard
+# hideKeyboard CANNOT dismiss this screen's keyboard — it failed in
+# runs 39363490145 and 39365940718, the second time even after
+# waitForAnimationToEnd. Dismiss by switching tabs instead: the Make
+# form unmounts, which resigns the input; the typed text lives in
+# QrScreen state (not the tab body), so it survives the switch, and
+# the field does not auto-focus on return.
+- tapOn: "History"
+- tapOn: "Make"
 - tapOn: "Make QR code"
 - assertVisible: "Share"
 - tapOn: "Copy text"

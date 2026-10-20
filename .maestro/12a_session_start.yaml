@@ -2,6 +2,12 @@ appId: app.everytool.ios
 name: Screenshot session - start
 ---
 - launchApp
+# Wait for the home grid like 01_home does: a bare tapOn right after
+# launchApp timed out in run 39365940718 (slow start after the
+# recording-stitch flow) even though the label exists.
+- extendedWaitUntil:
+    visible: "Open Long screenshot"
+    timeout: 30000
 - tapOn: "Open Long screenshot"
 - tapOn: "Screenshots"
 - tapOn:

@@ -10,11 +10,28 @@ name: Screenshot session - stitch the screenshots taken since Start, delete sour
 - extendedWaitUntil:
     visible: "Your long screenshot"
     timeout: 180000
+# Same viewport trap as 10_stitch_photos (run 39361202347): the size
+# line and the buttons sit below the result preview — scroll first.
+- scrollUntilVisible:
+    element:
+      text: "1170 × 4332 px.*"
+    direction: DOWN
+    timeout: 20000
 - assertVisible: "1170 × 4332 px.*"
 - takeScreenshot: 12b-session-stitched
+- scrollUntilVisible:
+    element:
+      text: "Save to Photos"
+    direction: DOWN
+    timeout: 20000
 - tapOn: "Save to Photos"
 - extendedWaitUntil:
     visible: "Saved to Photos"
+    timeout: 20000
+- scrollUntilVisible:
+    element:
+      text: "Delete the 3 screenshots from Photos"
+    direction: DOWN
     timeout: 20000
 - tapOn: "Delete the 3 screenshots from Photos"
 - tapOn:
