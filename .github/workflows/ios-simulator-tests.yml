@@ -51,6 +51,7 @@ jobs:
           set -euo pipefail
           grep -q "EverytoolSharedVault" ios/Podfile.lock || { echo "::error::EverytoolSharedVault module is not linked"; exit 1; }
           grep -q "OpenToolIntent.swift in Sources" ios/Everytool.xcodeproj/project.pbxproj || { echo "::error::OpenToolIntent is not in the app target"; exit 1; }
+          grep -q "EverytoolIntents.swift in Sources" ios/Everytool.xcodeproj/project.pbxproj || { echo "::error::EverytoolIntents is not in the app target"; exit 1; }
 
       - name: Pick and boot an iPhone simulator
         run: |
@@ -129,13 +130,38 @@ jobs:
           done
           strings "$BIN" | grep -q "Record Long Screenshot"
           echo "All Control Center controls present."
+          strings "$BIN" | grep -q "app.everytool.ios.widgets.countdown" || { echo "::error::Countdown widget missing"; exit 1; }
+          echo "Countdown widget present."
+
+      - name: Verify Siri & Shortcuts actions are registered
+        run: |
+          set -euo pipefail
+          META="$APP/Metadata.appintents"
+          test -d "$META" || { echo "::error::No App Intents metadata in the app bundle"; exit 1; }
+          for intent in OpenEverytoolToolIntent StartLongScreenshotIntent StitchScreenshotsIntent SaveClipIntent GetClipsIntent TextStatsIntent ExtractFromTextIntent DaysUntilIntent SplitBillIntent MakeQRCodeIntent ConvertImageIntent ResizeImageIntent RemoveLocationIntent MergePDFsIntent OpenToolIntent; do
+            grep -rqa "$intent" "$META" || { echo "::error::$intent not registered"; exit 1; }
+          done
+          echo "All 15 App Intents registered."
 
       - name: Install app, grant photo access, add media
         run: |
           set -euo pipefail
           xcrun simctl install "$UDID" "$APP"
-          xcrun simctl privacy "$UDID" grant photos app.everytool.ios || true
-          xcrun simctl privacy "$UDID" grant photos-add app.everytool.ios || true
+          # STRICT grants (12a diagnostics): a Photos grant that silently
+          # did not stick was one of two suspects for the session-start
+          # failure, and the old `|| true` hid which. Fail loudly on the
+          # grant itself, then read the grant back from the simulator's
+          # TCC database so the run log states the resulting auth_value.
+          xcrun simctl privacy "$UDID" grant photos app.everytool.ios
+          xcrun simctl privacy "$UDID" grant photos-add app.everytool.ios
+          TCC_DB="$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data/Library/TCC/TCC.db"
+          if [ -f "$TCC_DB" ]; then
+            AUTH="$(sqlite3 "$TCC_DB" "SELECT auth_value FROM access WHERE service='kTCCServicePhotos' AND client='app.everytool.ios' ORDER BY auth_value DESC LIMIT 1;")"
+            echo "TCC kTCCServicePhotos for app.everytool.ios: auth_value=${AUTH:-<no row>}"
+            { [ -n "$AUTH" ] && [ "$AUTH" != "0" ]; } || { echo "::error::Photos grant did not stick (TCC auth_value=${AUTH:-none})"; exit 1; }
+          else
+            echo "::warning::TCC database not found at $TCC_DB — grant readback skipped (the grant itself was strict)"
+          fi
           node --experimental-strip-types scripts/sim/make-fixtures.ts sim-fixtures
           xcrun simctl addmedia "$UDID" sim-fixtures/photo.png sim-fixtures/shots/*.png
 

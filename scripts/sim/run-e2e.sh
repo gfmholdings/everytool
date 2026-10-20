@@ -9,6 +9,14 @@ FX="${FX:-$ROOT/sim-fixtures}"
 UDID="${UDID:?set UDID}"
 OUT="${OUT:-$ROOT/build/e2e}"
 mkdir -p "$OUT"
+# Absolutize OUT: run_flow cd's into $OUT/<flow> before invoking
+# Maestro, and Maestro resolves --output/--debug-output relative to
+# that cwd — with a relative OUT the reports landed in a doubled
+# path (e2e/<flow>/build/e2e/<flow>/report.xml) and the debug output
+# (failure screenshots + view hierarchy) never reached the uploaded
+# artifact at all (proven by run 39372435880's artifact: 17 files,
+# reports only). Absolute paths land everything under build/e2e.
+OUT="$(cd "$OUT" && pwd)"
 INJECT="$HERE/inject.sh"
 results=()
 failed=0
@@ -60,6 +68,12 @@ run_flow "Long screenshot: 3 screenshots → stitch, save, share" 10_stitch_phot
 
 "$INJECT" broadcast "$FX/frames"
 run_flow "Long screenshot: finished recording auto-opens + stitches, save, copy" 11_stitch_recording.yaml
+
+"$INJECT" share qr image "$FX/qr-suspicious.png"
+run_flow "QR: shared screenshot scanned, look-alike link flagged" 13_qr_shared_link_check.yaml
+
+xcrun simctl addmedia "$UDID" "$FX/receipt.png"
+run_flow "Split bill: receipt photo read on-device, split by item" 14_receipt_scan.yaml 0
 
 # Screenshot session: Start in the app, then screenshots arrive in Photos
 # one by one (as if taken while scrolling), then Stitch.

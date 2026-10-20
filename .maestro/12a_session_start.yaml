@@ -47,6 +47,26 @@ name: Screenshot session - start
       visible: "Allow Full Access|Allow Access to All Photos"
     commands:
       - tapOn: "Allow Full Access|Allow Access to All Photos"
+# Gate diagnostics: if beginSession stopped at the Photos gate, its
+# error text is on screen now — name the gate in a screenshot so
+# the run artifacts say which one fired. The blocking assertion
+# below still decides the flow; the Maestro debug hierarchy in the
+# artifacts carries the same text even if a gate text is off-screen.
+- runFlow:
+    when:
+      visible: "needs Photos access to find your screenshots"
+    commands:
+      - takeScreenshot: 12a-GATE-denied
+- runFlow:
+    when:
+      visible: "stay hidden from Everytool"
+    commands:
+      - takeScreenshot: 12a-GATE-limited
+- runFlow:
+    when:
+      visible: "needs Full Access to Photos to find your screenshots"
+    commands:
+      - takeScreenshot: 12a-GATE-full-access
 - extendedWaitUntil:
     visible: "Session running.*"
     timeout: 20000
