@@ -1,4 +1,5 @@
 import { File } from 'expo-file-system';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
 import { tempFileUri } from './files';
 import {
@@ -6,6 +7,8 @@ import {
   extractPdfBytes,
   mergePdfBytes,
   pageCountOf,
+  shrinkPdfImages,
+  type JpegReencoder,
   type PdfOutput,
 } from './pdfCore';
 
@@ -43,6 +46,8 @@ export interface PdfResult {
   bytes: number;
   /** Compress only: false when the file couldn't be made smaller. */
   shrunk?: boolean;
+  /** Compress with photos: how many photos inside were made smaller. */
+  photosShrunk?: number;
 }
 
 function writeResult(out: PdfOutput, shrunk?: boolean): PdfResult {
@@ -63,10 +68,47 @@ export async function extractPdfPages(uri: string, indices: number[]): Promise<P
   return writeResult(await extractPdfBytes(await new File(uri).bytes(), indices));
 }
 
-/** Object-stream re-save; drops leftovers when safe; never bigger. */
-export async function compressPdf(uri: string): Promise<PdfResult> {
-  const out = await compressPdfBytes(await new File(uri).bytes());
-  return writeResult(out, out.shrunk);
+/** The platform re-encodes each photo: long side ≤ 1600 px, JPEG 60%. */
+const nativeReencoder: JpegReencoder = async (jpeg, width, height) => {
+  const tmp = tempFileUri('jpg', 'pdf-photo');
+  new File(tmp).write(jpeg);
+  try {
+    const long = Math.max(width, height);
+    const actions =
+      long > 1600 ? [{ resize: width >= height ? { width: 1600 } : { height: 1600 } }] : [];
+    const out = await manipulateAsync(tmp, actions, { format: SaveFormat.JPEG, compress: 0.6 });
+    const bytes = await new File(out.uri).bytes();
+    return { bytes, width: out.width, height: out.height };
+  } finally {
+    try {
+      new File(tmp).delete();
+    } catch {
+      // cache cleanup is best effort
+    }
+  }
+};
+
+/**
+ * Compress: optionally recompress the photos inside (real shrinking for
+ * scanned / photo PDFs), then re-save the structure. Never bigger.
+ */
+export async function compressPdf(
+  uri: string,
+  opts: { photos?: boolean } = {},
+): Promise<PdfResult> {
+  let bytes: Uint8Array = await new File(uri).bytes();
+  const original = bytes.length;
+  let photosShrunk = 0;
+  if (opts.photos) {
+    const r = await shrinkPdfImages(bytes, nativeReencoder);
+    if (r.shrunk) {
+      bytes = r.bytes;
+      photosShrunk = r.replaced;
+    }
+  }
+  const out = await compressPdfBytes(bytes);
+  const result = writeResult(out, out.bytes.length < original);
+  return { ...result, photosShrunk };
 }
 
 export async function pdfPageCount(uri: string): Promise<number> {

@@ -6,6 +6,7 @@ import {
   analyzeFrames,
   emitSegments,
   FeatureBuilder,
+  PixelateSink,
   type FrameFeatures,
 } from '../src/lib/stitchCore.ts';
 
@@ -310,4 +311,36 @@ test('stitch: capture noise does not break seams or repeat the tab bar', () => {
   assert.ok(analysis.footer >= TAB, `footer ${analysis.footer} must cover the tab bar`);
   assert.ok(analysis.header >= CONTENT_TOP, `header ${analysis.header} must cover the bars`);
   assert.equal(analysis.height, CONTENT_TOP + 1000 + CONTENT_H + TAB);
+});
+
+
+test('hide details: rectangle becomes flat blocks, the rest is untouched', () => {
+  const w = 60;
+  const h = 50;
+  const rows: Uint8Array[] = [];
+  const sink = new PixelateSink(w, [{ x: 13, y: 7, width: 20, height: 15 }], 12, (r) => rows.push(r.slice()));
+  const src: Uint8Array[] = [];
+  for (let y = 0; y < h; y += 1) {
+    const row = new Uint8Array(w * 4);
+    for (let x = 0; x < w; x += 1) {
+      row[x * 4] = (x * 37 + y * 11) & 255;
+      row[x * 4 + 1] = (x * 5) & 255;
+      row[x * 4 + 2] = (y * 9) & 255;
+      row[x * 4 + 3] = 255;
+    }
+    src.push(row);
+    sink.writeRow(row);
+  }
+  sink.finish();
+  assert.equal(rows.length, h);
+  // padded to the 12-px grid: x 12..36, y 0..24
+  const px = (y: number, x: number) => Array.from(rows[y]!.subarray(x * 4, x * 4 + 3)).join(',');
+  for (const [bx, by] of [[12, 0], [24, 12]] as const) {
+    const ref = px(by, bx);
+    for (let y = by; y < by + 12; y += 1) for (let x = bx; x < bx + 12; x += 1) assert.equal(px(y, x), ref);
+  }
+  // outside the padded rect: identical to the source
+  for (const [x, y] of [[0, 0], [40, 5], [20, 30], [59, 49]] as const) {
+    assert.deepEqual(rows[y]!.subarray(x * 4, x * 4 + 4), src[y]!.subarray(x * 4, x * 4 + 4));
+  }
 });

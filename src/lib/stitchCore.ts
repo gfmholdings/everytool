@@ -469,7 +469,7 @@ export function analyzeFrames(
  * frame is decoded once, in segment order, so memory stays at one frame.
  */
 export async function emitSegments(
-  analysis: StitchAnalysis,
+  analysis: Pick<StitchAnalysis, 'segments'>,
   decode: (
     frame: number,
     onRow: (y: number, rgba: Uint8Array) => void,
@@ -495,4 +495,105 @@ export async function emitSegments(
     onProgress?.(i + 1, total);
   }
   return written;
+}
+
+// ---------------------------------------------------------------------------
+// Hiding private details: pixelate rectangles while rows stream out.
+// ---------------------------------------------------------------------------
+
+export interface Redaction {
+  /** Output-image pixels. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Block size for pixelation: coarse enough that text can't be read. */
+export function pixelBlock(imageWidth: number): number {
+  return Math.max(12, Math.round(imageWidth / 36));
+}
+
+/**
+ * Streams rows through, replacing every rectangle with flat blocks of
+ * its own average colour. Buffers one band of `block` rows at a time, so
+ * memory stays tiny even for an image tens of thousands of rows tall.
+ * Blocks are aligned to the image grid; a rectangle is padded out to
+ * whole blocks so no sliver of the original survives at its edges.
+ */
+export class PixelateSink {
+  private band: Uint8Array[] = [];
+  private bandStart = 0;
+  private readonly rects: Redaction[];
+  private readonly width: number;
+  private readonly block: number;
+  private readonly forward: (rgba: Uint8Array) => void;
+
+  constructor(
+    width: number,
+    rects: Redaction[],
+    block: number,
+    forward: (rgba: Uint8Array) => void,
+  ) {
+    this.width = width;
+    this.block = block;
+    this.forward = forward;
+    this.rects = rects
+      .map((r) => ({
+        x: Math.max(0, Math.floor(r.x / block) * block),
+        y: Math.max(0, Math.floor(r.y / block) * block),
+        width: 0,
+        height: 0,
+        x2: Math.min(width, Math.ceil((r.x + r.width) / block) * block),
+        y2: Math.ceil((r.y + r.height) / block) * block,
+      }))
+      .filter((r) => r.x2 > r.x && r.y2 > r.y)
+      .map((r) => ({ x: r.x, y: r.y, width: r.x2 - r.x, height: r.y2 - r.y }));
+  }
+
+  writeRow(rgba: Uint8Array): void {
+    this.band.push(rgba.slice(0, this.width * 4));
+    if (this.band.length === this.block) this.flushBand();
+  }
+
+  finish(): void {
+    if (this.band.length > 0) this.flushBand();
+  }
+
+  private flushBand(): void {
+    const y0 = this.bandStart;
+    const y1 = y0 + this.band.length;
+    for (const r of this.rects) {
+      if (r.y >= y1 || r.y + r.height <= y0) continue;
+      for (let bx = r.x; bx < r.x + r.width; bx += this.block) {
+        const xEnd = Math.min(bx + this.block, r.x + r.width, this.width);
+        let sr = 0;
+        let sg = 0;
+        let sb = 0;
+        let n = 0;
+        for (const row of this.band) {
+          for (let x = bx; x < xEnd; x += 1) {
+            sr += row[x * 4]!;
+            sg += row[x * 4 + 1]!;
+            sb += row[x * 4 + 2]!;
+            n += 1;
+          }
+        }
+        if (n === 0) continue;
+        const cr = Math.round(sr / n);
+        const cg = Math.round(sg / n);
+        const cb = Math.round(sb / n);
+        for (const row of this.band) {
+          for (let x = bx; x < xEnd; x += 1) {
+            row[x * 4] = cr;
+            row[x * 4 + 1] = cg;
+            row[x * 4 + 2] = cb;
+          }
+        }
+      }
+    }
+    for (const row of this.band) this.forward(row);
+    this.bandStart = y1;
+    this.band = [];
+  }
 }

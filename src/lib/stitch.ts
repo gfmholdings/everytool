@@ -7,10 +7,15 @@ import {
   emitSegments,
   FEATURE_COLS,
   FeatureBuilder,
+  PixelateSink,
+  pixelBlock,
   type FrameFeatures,
+  type Redaction,
   type Segment,
 } from './stitchCore';
 import { stitchWidth } from './stitchMath';
+
+export type { Redaction };
 
 export interface ShotInput {
   uri: string;
@@ -39,6 +44,8 @@ export interface StitchResult {
   /** The normalized frames + segments, for a memory-light preview. */
   frames: StitchFrame[];
   segments: Segment[];
+  /** Areas hidden (pixelated) in the written image. */
+  redactions: Redaction[];
 }
 
 export type StitchPhase = 'preparing' | 'reading' | 'matching' | 'writing';
@@ -223,7 +230,52 @@ export async function stitchFrames(
     trimmed: analysis.trimmed,
     frames,
     segments: analysis.segments,
+    redactions: [],
   };
+}
+
+/**
+ * Write the stitched image again with the given areas pixelated ("Hide
+ * details"). Uses the same frames and seams, so it is exact and fast —
+ * no re-matching. Returns a new result; the previous file is kept until
+ * the cache is cleared.
+ */
+export async function renderStitch(
+  result: StitchResult,
+  redactions: Redaction[],
+  onProgress?: StitchProgress,
+): Promise<StitchResult> {
+  const outFile = new File(Paths.cache, `long-screenshot-${Date.now().toString(36)}.png`);
+  if (outFile.exists) outFile.delete();
+  outFile.create();
+  const sink = fileSink(outFile);
+  try {
+    const writer = new PngStreamWriter(sink, result.width, result.height);
+    const pix = new PixelateSink(result.width, redactions, pixelBlock(result.width), (row) =>
+      writer.writeRow(row),
+    );
+    await emitSegments(
+      result,
+      async (frame, onRow, stopAfterRow) => {
+        const bytes = await new File(result.frames[frame]!.uri).bytes();
+        decodePngRows(bytes, onRow, stopAfterRow);
+      },
+      (rgba) => pix.writeRow(rgba),
+      (done, total) => onProgress?.('writing', done, total),
+    );
+    pix.finish();
+    writer.finish();
+  } catch (e) {
+    sink.close();
+    try {
+      outFile.delete();
+    } catch {
+      // ignore
+    }
+    throw e;
+  }
+  sink.close();
+  return { ...result, uri: outFile.uri, bytes: sink.bytes, redactions };
 }
 
 /** Picked screenshots, kept in the order given. */

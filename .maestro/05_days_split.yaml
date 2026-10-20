@@ -8,6 +8,23 @@ name: Days counter and Split bill
 - assertVisible: "days to go"
 - tapOn: "Age"
 - assertVisible: "days old"
+# save a countdown (feature pass; shown by the Countdown widget).
+# No hideKeyboard: dismiss with an unhandled tap on the result
+# card's plain "days to go" text (same pattern as the Tip label
+# below), which changes nothing, then tap Save.
+- tapOn: "Until"
+- tapOn:
+    id: "days.title"
+- inputText: "Maestro trip"
+- tapOn: "days to go"
+- tapOn:
+    id: "days.save"
+- extendedWaitUntil:
+    visible: "Maestro trip"
+    timeout: 20000
+- extendedWaitUntil:
+    visible: "Your countdowns"
+    timeout: 20000
 - takeScreenshot: 05-days
 - tapOn: "Back"
 - tapOn: "Open Split bill"
@@ -22,3 +39,29 @@ name: Days counter and Split bill
 - tapOn: "+"
 - assertVisible: "\\$39\\.34"
 - takeScreenshot: 05-split
+# by item: Pizza shared by both, Wine for A only, 18% tip
+# (fixed4 segment; its hideKeyboard calls are dropped — the add-item
+# form sits mid-screen, above the keyboard, so Add item is directly
+# tappable with the decimal pad up, as are the person chips.)
+- tapOn: "−"
+- tapOn: "By item"
+- tapOn:
+    id: "split.itemName"
+- inputText: "Pizza"
+- tapOn:
+    id: "split.itemPrice"
+- inputText: "30"
+- tapOn: "Add item"
+- tapOn:
+    id: "split.itemName"
+- inputText: "Wine"
+- tapOn:
+    id: "split.itemPrice"
+- inputText: "20"
+- tapOn: "Add item"
+- tapOn: "Person A shared Wine"
+- scrollUntilVisible:
+    element: "Person B pays"
+- assertVisible: "\\$41\\.30"
+- assertVisible: "\\$17\\.70"
+- takeScreenshot: 05-split-by-item

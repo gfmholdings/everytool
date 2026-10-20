@@ -17,8 +17,14 @@ name: Convert - photo arriving from the share sheet (app already running)
     visible: "Saved to Photos"
     timeout: 15000
 - tapOn: "PDF"
-- tapOn: "Convert to PDF"
+- tapOn: "Make one PDF"
 - extendedWaitUntil:
     visible: "photos.pdf.*"
     timeout: 30000
+# Remove location: lossless copy without GPS, verified natively
+- tapOn: "No location"
+- tapOn: "Remove location"
+- extendedWaitUntil:
+    visible: "No location data in the result."
+    timeout: 20000
 - takeScreenshot: 07-convert

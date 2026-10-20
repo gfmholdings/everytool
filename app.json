@@ -80,10 +80,10 @@
         ]
       },
       "infoPlist": {
-        "NSCameraUsageDescription": "Everytool uses the camera to scan QR codes. Nothing leaves your phone.",
+        "NSCameraUsageDescription": "Everytool uses the camera to scan QR codes and receipts. Everything is read on this phone.",
         "NSMicrophoneUsageDescription": "Everytool never records audio. This is only requested if you start a screen recording that includes sound.",
         "NSPhotoLibraryAddUsageDescription": "Everytool saves finished screenshots, images and GIFs to your photo library.",
-        "NSPhotoLibraryUsageDescription": "Everytool reads the photos you pick so it can stitch, convert, resize and make GIFs — all on this phone.",
+        "NSPhotoLibraryUsageDescription": "Everytool reads the photos you pick \u2014 and, in a screenshot session, the screenshots you take \u2014 so it can stitch, convert, resize, scan and make GIFs, all on this phone.",
         "ITSAppUsesNonExemptEncryption": false
       },
       "supportsTablet": false

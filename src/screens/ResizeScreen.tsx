@@ -8,7 +8,15 @@ import { Card, GhostButton, PrimaryButton, Segmented, ToolShell } from '../compo
 import { formatBytes, measureImage, saveToPhotos, shareFile, tempFileUri } from '../lib/files';
 import { colors, type } from '../theme';
 
-const WIDTHS = [640, 828, 1080, 1170, 1600] as const;
+const WIDTHS = [640, 828, 1080, 1170, 1280, 1600] as const;
+
+/** One-tap sizes for where the photo is going. */
+const PRESETS = [
+  { label: 'Email', width: 1280, quality: '0.7', note: 'small attachment, still sharp' },
+  { label: 'WhatsApp', width: 1600, quality: '0.7', note: 'matches what chat apps keep' },
+  { label: 'Instagram', width: 1080, quality: '0.9', note: '1080 px wide, high quality' },
+  { label: 'Tiny', width: 640, quality: '0.5', note: 'smallest, for forms with size limits' },
+] as const;
 const QUALITIES = [
   { id: '0.5', label: 'Smaller' },
   { id: '0.7', label: 'Balanced' },
@@ -139,6 +147,32 @@ export function ResizeScreen({
       />
       {source && (
         <>
+          <Text style={type.label}>For</Text>
+          <View style={styles.chips}>
+            {PRESETS.map((p) => {
+              const idx = WIDTHS.indexOf(p.width);
+              const active = idx === widthIdx && quality === p.quality;
+              return (
+                <PrimaryChip
+                  key={p.label}
+                  label={p.label}
+                  active={active}
+                  onPress={() => {
+                    setWidthIdx(idx);
+                    setQuality(p.quality);
+                    setResult(null);
+                  }}
+                />
+              );
+            })}
+          </View>
+          {PRESETS.filter((p) => WIDTHS.indexOf(p.width) === widthIdx && quality === p.quality).map(
+            (p) => (
+              <Text key={p.label} style={type.small}>
+                {p.label}: {p.note}
+              </Text>
+            ),
+          )}
           <Text style={type.label}>Width</Text>
           <View style={styles.chips}>
             {WIDTHS.map((w, i) => {
@@ -162,7 +196,10 @@ export function ResizeScreen({
           <Segmented
             options={QUALITIES.map((q) => ({ id: q.id as string, label: q.label }))}
             value={quality}
-            onChange={setQuality}
+            onChange={(q) => {
+              setQuality(q);
+              setResult(null);
+            }}
           />
           <PrimaryButton
             label={busy ? 'Resizing…' : 'Resize'}

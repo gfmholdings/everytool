@@ -1,0 +1,16 @@
+appId: app.everytool.ios
+name: QR - a screenshot shared in is scanned; a look-alike link is flagged before opening
+---
+# The driver put qr-suspicious.png in the share inbox with tool "qr".
+- openLink: "everytool://tool/qr"
+- tapOn:
+    text: "Open"
+    optional: true
+- extendedWaitUntil:
+    visible: "Check before you open"
+    timeout: 20000
+- assertVisible: "paypal.com.account-verify.example"
+- assertVisible: ".*Not secure \\(http\\).*"
+- assertVisible: ".*Looks like “paypal”.*"
+- assertVisible: "Open anyway"
+- takeScreenshot: 13-qr-link-check

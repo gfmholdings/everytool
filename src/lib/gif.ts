@@ -4,18 +4,20 @@ import * as VideoThumbnails from 'expo-video-thumbnails';
 import { decodePngRows } from './deflate';
 import { tempFileUri } from './files';
 import {
+  buildPalette,
   encodeGif,
-  GIF_FPS,
-  GIF_MAX_SECONDS,
   GIF_WIDTH,
   quantizeFrame,
+  planGif,
+  quantizeWithPalette,
 } from './gifenc';
 
-// Video to GIF — plainly simplified, same as the mockup: frames are
-// sampled off the clip with expo-video-thumbnails, quantized to a fixed
-// 216-color cube palette, and encoded as a real GIF89a. No dithering.
+// Video to GIF: pick where to start and how long, frame rate and width;
+// frames are sampled with expo-video-thumbnails and coloured with one
+// adaptive palette for the whole clip plus ordered dithering ("Best"),
+// or the old fixed palette ("Fast"). Encoded as a real GIF89a.
 
-export { encodeGif, GIF_FPS, GIF_MAX_SECONDS, GIF_WIDTH } from './gifenc';
+export { encodeGif, GIF_FPS, GIF_MAX_SECONDS, GIF_WIDTH, planGif } from './gifenc';
 
 export interface GifResult {
   uri: string;
@@ -25,68 +27,73 @@ export interface GifResult {
   bytes: number;
 }
 
+export interface GifOptions {
+  /** Clip length in seconds (for clamping). */
+  durationSec: number;
+  /** Where to start, seconds. Default 0. */
+  startSec?: number;
+  /** How long, seconds. Default GIF_MAX_SECONDS, max 10. */
+  lengthSec?: number;
+  fps?: number;
+  width?: number;
+  /** 'best' = adaptive palette + dithering; 'fast' = fixed palette. */
+  colour?: 'best' | 'fast';
+  toPng: (jpegUri: string, width: number) => Promise<{ uri: string; width: number; height: number }>;
+  onProgress?: (done: number, total: number) => void;
+}
+
+/** Memory guard: RGBA frames kept for the adaptive palette. */
+const MAX_PIXELS = 36_000_000;
+
 /**
- * Sample the first GIF_MAX_SECONDS of a video into a GIF. Frames come
- * from expo-video-thumbnails (JPEG stills at timestamps), decoded through
- * the PNG path is not possible for JPEG — so thumbnails are requested as
- * PNG-sized stills is not supported either; instead each thumbnail JPEG is
- * decoded by the platform into a PNG via ImageManipulator upstream.
- * Here we accept PNG frame URIs produced by the caller (the screen runs
- * each thumbnail through expo-image-manipulator to normalize to PNG).
+ * Sample a stretch of a video into a GIF. Frames come from
+ * expo-video-thumbnails (JPEG stills at timestamps); the caller turns each
+ * into a PNG at the target width (expo-image-manipulator), decoded here.
  */
-export async function makeGifFromVideo(
-  videoUri: string,
-  opts: {
-    durationSec: number;
-    toPng: (jpegUri: string) => Promise<{ uri: string; width: number; height: number }>;
-    onProgress?: (done: number, total: number) => void;
-  },
-): Promise<GifResult> {
-  const seconds = Math.min(opts.durationSec || GIF_MAX_SECONDS, GIF_MAX_SECONDS);
-  const total = Math.max(1, Math.floor(seconds * GIF_FPS));
-  const frames: Uint8Array[] = [];
-  let width = GIF_WIDTH;
+export async function makeGifFromVideo(videoUri: string, opts: GifOptions): Promise<GifResult> {
+  const width = Math.max(120, Math.min(640, Math.round(opts.width ?? GIF_WIDTH)));
+  const plan = planGif(opts);
+  let times = plan.times;
+  const rgbaFrames: Uint8Array[] = [];
+  const indexed: Uint8Array[] = [];
+  const best = (opts.colour ?? 'best') === 'best';
   let height = 0;
-  for (let i = 0; i < total; i += 1) {
-    const timeMs = Math.round((i / GIF_FPS) * 1000);
+  for (let i = 0; i < times.length; i += 1) {
     const thumb = await VideoThumbnails.getThumbnailAsync(videoUri, {
-      time: timeMs,
-      quality: 0.7,
+      time: times[i]!,
+      quality: 0.8,
     });
-    const png = await opts.toPng(thumb.uri);
+    const png = await opts.toPng(thumb.uri, width);
     const bytes = await new File(png.uri).bytes();
-    let rgba = new Uint8Array(png.width * png.height * 4);
+    const rgba = new Uint8Array(png.width * png.height * 4);
     decodePngRows(bytes, (y, row) => {
       rgba.set(row, y * png.width * 4);
     });
-    // Downscale rows to GIF_WIDTH by nearest sampling if wider.
-    if (png.width !== GIF_WIDTH) {
-      const scale = GIF_WIDTH / png.width;
-      const targetH = Math.max(2, Math.round(png.height * scale));
-      const scaled = new Uint8Array(GIF_WIDTH * targetH * 4);
-      for (let y = 0; y < targetH; y += 1) {
-        const sy = Math.min(png.height - 1, Math.floor(y / scale));
-        for (let x = 0; x < GIF_WIDTH; x += 1) {
-          const sx = Math.min(png.width - 1, Math.floor(x / scale));
-          const si = (sy * png.width + sx) * 4;
-          const di = (y * GIF_WIDTH + x) * 4;
-          scaled[di] = rgba[si] ?? 0;
-          scaled[di + 1] = rgba[si + 1] ?? 0;
-          scaled[di + 2] = rgba[si + 2] ?? 0;
-          scaled[di + 3] = 255;
-        }
-      }
-      rgba = scaled;
-      width = GIF_WIDTH;
-      height = targetH;
-    } else {
-      width = png.width;
+    if (i === 0) {
       height = png.height;
+      // keep memory bounded: fewer frames for big/long GIFs
+      const maxFrames = Math.max(8, Math.floor(MAX_PIXELS / (png.width * png.height)));
+      if (best && times.length > maxFrames) {
+        const step = times.length / maxFrames;
+        times = Array.from({ length: maxFrames }, (_, k) => times[Math.floor(k * step)]!);
+      }
     }
-    frames.push(quantizeFrame(rgba));
-    opts.onProgress?.(i + 1, total);
+    if (png.width !== width || png.height !== height) continue; // odd frame size: skip
+    if (best) rgbaFrames.push(rgba);
+    else indexed.push(quantizeFrame(rgba));
+    opts.onProgress?.(i + 1, times.length);
   }
-  const gif = encodeGif(frames, width, height, Math.round(100 / GIF_FPS));
+  if (best && rgbaFrames.length === 0) throw new Error('No frames could be read from that video.');
+  if (!best && indexed.length === 0) throw new Error('No frames could be read from that video.');
+  let palette: Uint8Array | undefined;
+  let frames = indexed;
+  if (best) {
+    palette = buildPalette(rgbaFrames);
+    const cache = new Int16Array(32768).fill(-1);
+    frames = rgbaFrames.map((f) => quantizeWithPalette(f, width, palette!, true, cache));
+  }
+  const delay = Math.round((100 * (times.length > 1 ? (times[1]! - times[0]!) / 1000 : 1 / plan.fps)));
+  const gif = encodeGif(frames, width, height, Math.max(2, delay), palette);
   const uri = tempFileUri('gif', 'everytool-gif');
   new File(uri).write(gif);
   return { uri, width, height, frames: frames.length, bytes: gif.length };

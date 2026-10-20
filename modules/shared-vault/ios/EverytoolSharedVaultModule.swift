@@ -1,7 +1,10 @@
 import ExpoModulesCore
+import ImageIO
 import ReplayKit
 import UIKit
 import UserNotifications
+import Vision
+import WidgetKit
 
 /// The shared App Group store. The app, keyboard, share extension and
 /// broadcast extension all keep one JSON document ("everytool.state.v1")
@@ -53,6 +56,71 @@ public class EverytoolSharedVaultModule: Module {
       guard let defaults = UserDefaults(suiteName: groupId) else { return false }
       if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
       return true
+    }
+
+    /// Tell the Days counter widgets that countdowns changed.
+    Function("reloadWidgets") { () -> Void in
+      WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    /// On-device text recognition (Apple Vision) for receipt scanning.
+    /// Boxes are normalised 0–1 with the origin at the top-left.
+    AsyncFunction("recognizeText") { (uri: String) throws -> [[String: Any]] in
+      guard
+        let url = URL(string: uri),
+        let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+        let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+      else { return [] }
+      var orientation = CGImagePropertyOrientation.up
+      if let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+         let raw = props[kCGImagePropertyOrientation] as? UInt32,
+         let o = CGImagePropertyOrientation(rawValue: raw) {
+        orientation = o
+      }
+      let request = VNRecognizeTextRequest()
+      request.recognitionLevel = .accurate
+      request.usesLanguageCorrection = false
+      let handler = VNImageRequestHandler(cgImage: image, orientation: orientation, options: [:])
+      try handler.perform([request])
+      let observations = request.results ?? []
+      return observations.compactMap { obs -> [String: Any]? in
+        guard let top = obs.topCandidates(1).first else { return nil }
+        let b = obs.boundingBox
+        return [
+          "text": top.string,
+          "x": Double(b.minX),
+          "y": Double(1 - b.maxY),
+          "width": Double(b.width),
+          "height": Double(b.height),
+        ]
+      }
+    }
+
+    /// Copy a photo without its location (GPS) and XMP metadata. For JPEG
+    /// and HEIC this is lossless: the image data is not re-encoded.
+    Function("stripLocation") { (inputUri: String, outputUri: String) -> Bool in
+      guard
+        let inURL = URL(string: inputUri),
+        let outURL = URL(string: outputUri),
+        let source = CGImageSourceCreateWithURL(inURL as CFURL, nil),
+        let type = CGImageSourceGetType(source),
+        let dest = CGImageDestinationCreateWithURL(outURL as CFURL, type, 1, nil)
+      else { return false }
+      let options: [CFString: Any] = [
+        kCGImageMetadataShouldExcludeGPS: true,
+        kCGImageMetadataShouldExcludeXMP: true,
+      ]
+      return CGImageDestinationCopyImageSource(dest, source, options as CFDictionary, nil)
+    }
+
+    /// True when the image file carries GPS location metadata.
+    Function("imageHasLocation") { (uri: String) -> Bool in
+      guard
+        let url = URL(string: uri),
+        let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+        let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+      else { return false }
+      return props[kCGImagePropertyGPSDictionary] != nil
     }
 
     /// Opens Apple's screen-broadcast sheet with the Everytool broadcast

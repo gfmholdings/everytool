@@ -36,6 +36,17 @@ export interface Clip {
   text: string;
   pinned: boolean;
   createdAt: number;
+  /** Optional snippet word: typing it + space in the keyboard expands to `text`. */
+  shortcut?: string;
+}
+
+/** A saved countdown, shown in the Days counter and the widgets. */
+export interface Countdown {
+  id: string;
+  title: string;
+  /** Local-midnight date of the event, ms since epoch. */
+  date: number;
+  createdAt: number;
 }
 
 export interface QrHistoryItem {
@@ -49,6 +60,7 @@ export interface QrHistoryItem {
 export interface AppState {
   clips: Clip[];
   qrHistory: QrHistoryItem[];
+  countdowns: Countdown[];
 }
 
-export const emptyState: AppState = { clips: [], qrHistory: [] };
+export const emptyState: AppState = { clips: [], qrHistory: [], countdowns: [] };

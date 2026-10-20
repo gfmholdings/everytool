@@ -22,6 +22,18 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
     id: "clipboard.edit"
 - eraseText: 40
 - inputText: "Maestro clip edited"
+# Snippet word for this clip (feature pass): the shortcut field is
+# in the same edit card, above Save. No hideKeyboard (fails on this
+# screen) — scroll-settle onto the field, tap it, type the word,
+# then the proven top-edge Save tap below does the rest.
+- scrollUntilVisible:
+    element:
+      id: "clipboard.shortcut"
+    direction: DOWN
+    timeout: 20000
+- tapOn:
+    id: "clipboard.shortcut"
+- inputText: "mcl"
 # No hideKeyboard: it fails on this screen. Three runs (39365940718,
 # 39367801274, 39370026286) all died at the "Clip updated" wait and
 # every run's vault file proves updateClip never ran (the clip stayed
@@ -50,6 +62,9 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
     timeout: 20000
 - extendedWaitUntil:
     visible: ".*Maestro clip edited.*"
+    timeout: 20000
+- extendedWaitUntil:
+    visible: ".*type “mcl” \\+ space in the keyboard.*"
     timeout: 20000
 # pin / unpin
 - tapOn: "Pin"

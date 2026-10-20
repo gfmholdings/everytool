@@ -23,6 +23,19 @@ team `8H56KM6SCW`, scheme `everytool`.
 | Split bill | Total, tax, tip presets/custom, N people. Integer-cent math; shares always sum exactly to the total. |
 | Video to GIF | First 5 seconds, 8 fps, 360px wide, fixed palette — labeled "simplified" in the UI, because it is. |
 
+## What sets each tool apart
+
+See AUDIT.md → "Feature pass". In short:
+- Siri & Shortcuts actions for every tool.
+- Keyboard snippets.
+- "Hide details" on long screenshots.
+- Real PDF photo compression.
+- Batch convert, location-free photos, resize presets.
+- QR link safety check, and scan from a shared screenshot.
+- Countdown widgets.
+- Receipt scan with split by item.
+- Better-colour GIFs with trimming.
+
 ## Surfaces (native targets, via @bacons/apple-targets)
 
 All under `targets/`; bundle IDs derive from `app.everytool.ios`.

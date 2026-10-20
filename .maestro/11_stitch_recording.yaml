@@ -42,6 +42,21 @@ name: Long screenshot from a finished screen recording (auto-open + auto-stitch)
 - scroll
 - scroll
 - takeScreenshot: 11-stitch-full-length
+# hide a private area (feature pass): drag a box, Apply re-writes
+# the PNG pixelated. Exit afterwards with the repo-proven "Close"
+# (the viewer's close control — its visible text is "Done",
+# which run 39363490145 proved cannot be tapped by that name).
+- tapOn: "Hide details"
+- assertVisible: "Drag over anything private"
+- swipe:
+    start: 15%, 40%
+    end: 85%, 48%
+    duration: 600
+- tapOn: "Apply"
+- extendedWaitUntil:
+    visible: "Hid 1 area"
+    timeout: 60000
+- takeScreenshot: 11-stitch-hidden
 - tapOn: "Close"
 - scrollUntilVisible:
     element:

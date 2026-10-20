@@ -9,6 +9,7 @@ import {
   Image,
   Modal,
   Pressable,
+  type GestureResponderEvent,
   StyleSheet,
   Text,
   View,
@@ -30,7 +31,9 @@ import {
 } from '../lib/screenshotSession';
 import {
   COPY_MAX_HEIGHT,
+  renderStitch,
   stitchFrames,
+  type Redaction,
   type ShotInput,
   type StitchPhase,
   type StitchResult,
@@ -567,7 +570,27 @@ export function StitchScreen({
               onPress={() => void deleteSources()}
             />
           )}
-          <FullLengthViewer result={result} visible={viewer} onClose={() => setViewer(false)} />
+          <FullLengthViewer
+            result={result}
+            visible={viewer}
+            onClose={() => setViewer(false)}
+            busy={busy}
+            onApply={async (rects) => {
+              if (busyRef.current) return;
+              busyRef.current = true;
+              setBusy(true);
+              try {
+                setResult(await renderStitch(result, rects, onProgress));
+                notify(rects.length ? `Hid ${rects.length} area${rects.length === 1 ? '' : 's'}` : 'All areas shown again');
+              } catch (e) {
+                setError(e instanceof Error ? e.message : 'Couldn’t update the image.');
+              } finally {
+                busyRef.current = false;
+                setBusy(false);
+                setProgress(null);
+              }
+            }}
+          />
         </>
       )}
     </ToolShell>
@@ -620,7 +643,29 @@ function SegmentsPreview({ result, maxHeight }: { result: StitchResult; maxHeigh
       {shown.map((seg, i) => (
         <SegmentView key={i} frame={result.frames[seg.frame]!} seg={seg} scale={scale} />
       ))}
+      {result.redactions.map((r, i) => (
+        <HiddenBox key={i} r={r} scale={scale} offset={0} />
+      ))}
     </View>
+  );
+}
+
+/** How a hidden area looks in previews (the saved image is pixelated). */
+function HiddenBox({ r, scale, offset, pending }: { r: Redaction; scale: number; offset: number; pending?: boolean }) {
+  return (
+    <View
+      pointerEvents="none"
+      style={[
+        styles.hidden,
+        pending && styles.hiddenPending,
+        {
+          left: r.x * scale,
+          top: r.y * scale - offset,
+          width: r.width * scale,
+          height: r.height * scale,
+        },
+      ]}
+    />
   );
 }
 
@@ -628,13 +673,22 @@ function FullLengthViewer({
   result,
   visible,
   onClose,
+  onApply,
+  busy,
 }: {
   result: StitchResult;
   visible: boolean;
   onClose: () => void;
+  onApply: (rects: Redaction[]) => void;
+  busy: boolean;
 }) {
   const insets = useSafeAreaInsets();
   const [width, setWidth] = useState(0);
+  const [hiding, setHiding] = useState(false);
+  const [rects, setRects] = useState<Redaction[]>(result.redactions);
+  const [draft, setDraft] = useState<Redaction | null>(null);
+  const scrollY = useRef(0);
+  const [scrollShown, setScrollShown] = useState(0);
   const scale = width > 0 ? width / result.width : 0;
   const offsets = useMemo(() => {
     const out: number[] = [];
@@ -645,37 +699,133 @@ function FullLengthViewer({
     }
     return out;
   }, [result, scale]);
+
+  const scaleRef = useRef(scale);
+  useEffect(() => {
+    scaleRef.current = scale;
+  }, [scale]);
+  const startRef = useRef<{ x: number; y: number } | null>(null);
+  const toImage = (x: number, y: number) => ({
+    x: Math.max(0, Math.min(result.width, x / scaleRef.current)),
+    y: Math.max(0, Math.min(result.height, (y + scrollY.current) / scaleRef.current)),
+  });
+  const onGrant = (e: GestureResponderEvent) => {
+    startRef.current = toImage(e.nativeEvent.locationX, e.nativeEvent.locationY);
+  };
+  const onMove = (e: GestureResponderEvent) => {
+    const a = startRef.current;
+    if (!a) return;
+    const b = toImage(e.nativeEvent.locationX, e.nativeEvent.locationY);
+    setDraft({
+      x: Math.min(a.x, b.x),
+      y: Math.min(a.y, b.y),
+      width: Math.abs(b.x - a.x),
+      height: Math.abs(b.y - a.y),
+    });
+  };
+  const onRelease = () => {
+    setDraft((d) => {
+      if (d && d.width * scaleRef.current > 12 && d.height * scaleRef.current > 8) {
+        setRects((all) => [...all, d]);
+      }
+      return null;
+    });
+    startRef.current = null;
+  };
+
+  const changed = JSON.stringify(rects) !== JSON.stringify(result.redactions);
+
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <View
-        style={[styles.viewer, { paddingTop: insets.top }]}
-        onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
-      >
+      <View style={[styles.viewer, { paddingTop: insets.top }]}>
         <View style={styles.viewerBar}>
           <Text style={styles.viewerTitle}>
-            {result.width} × {result.height}
+            {hiding ? 'Drag over anything private' : `${result.width} × ${result.height}`}
           </Text>
           <Pressable onPress={onClose} hitSlop={10} accessibilityLabel="Close">
             <Text style={styles.viewerClose}>Done</Text>
           </Pressable>
         </View>
-        {scale > 0 && (
-          <FlatList
-            data={result.segments}
-            keyExtractor={(_, i) => String(i)}
-            renderItem={({ item }) => (
-              <SegmentView frame={result.frames[item.frame]!} seg={item} scale={scale} />
-            )}
-            getItemLayout={(_, index) => {
-              const s = result.segments[index]!;
-              return { length: (s.to - s.from) * scale, offset: offsets[index] ?? 0, index };
-            }}
-            windowSize={5}
-            initialNumToRender={4}
-            maxToRenderPerBatch={3}
-            removeClippedSubviews
-          />
-        )}
+        <View style={styles.flex} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
+          {scale > 0 && (
+            <FlatList
+              data={result.segments}
+              keyExtractor={(_, i) => String(i)}
+              scrollEnabled={!hiding}
+              onScroll={(e) => {
+                scrollY.current = e.nativeEvent.contentOffset.y;
+                setScrollShown(scrollY.current);
+              }}
+              scrollEventThrottle={32}
+              renderItem={({ item }) => (
+                <SegmentView frame={result.frames[item.frame]!} seg={item} scale={scale} />
+              )}
+              getItemLayout={(_, index) => {
+                const s = result.segments[index]!;
+                return { length: (s.to - s.from) * scale, offset: offsets[index] ?? 0, index };
+              }}
+              windowSize={5}
+              initialNumToRender={4}
+              maxToRenderPerBatch={3}
+              removeClippedSubviews
+            />
+          )}
+          <View
+            style={StyleSheet.absoluteFill}
+            pointerEvents={hiding ? 'auto' : 'none'}
+            onStartShouldSetResponder={() => hiding}
+            onMoveShouldSetResponder={() => hiding}
+            onResponderGrant={onGrant}
+            onResponderMove={onMove}
+            onResponderRelease={onRelease}
+            onResponderTerminate={onRelease}
+          >
+            {rects.map((r, i) => (
+              <HiddenBox key={i} r={r} scale={scale} offset={scrollShown} />
+            ))}
+            {draft && <HiddenBox r={draft} scale={scale} offset={scrollShown} pending />}
+          </View>
+        </View>
+        <View style={[styles.viewerTools, { paddingBottom: insets.bottom + 8 }]}>
+          {hiding ? (
+            <>
+              <Pressable onPress={() => setRects((all) => all.slice(0, -1))} hitSlop={8}>
+                <Text style={styles.toolText}>Undo</Text>
+              </Pressable>
+              <Pressable onPress={() => setHiding(false)} hitSlop={8}>
+                <Text style={styles.toolText}>Scroll</Text>
+              </Pressable>
+              <Pressable
+                disabled={busy || !changed}
+                onPress={() => {
+                  setHiding(false);
+                  onApply(rects);
+                }}
+                hitSlop={8}
+              >
+                <Text style={[styles.toolText, styles.toolPrimary, (busy || !changed) && { opacity: 0.4 }]}>
+                  {busy ? 'Saving…' : 'Apply'}
+                </Text>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <Pressable onPress={() => setHiding(true)} hitSlop={8} accessibilityLabel="Hide details">
+                <Text style={styles.toolText}>Hide details</Text>
+              </Pressable>
+              {rects.length > 0 && (
+                <Text style={styles.toolNote}>
+                  {rects.length} hidden{changed ? ' · not applied yet' : ''}
+                </Text>
+              )}
+              {changed && (
+                <Pressable disabled={busy} onPress={() => onApply(rects)} hitSlop={8}>
+                  <Text style={[styles.toolText, styles.toolPrimary]}>{busy ? 'Saving…' : 'Apply'}</Text>
+                </Pressable>
+              )}
+            </>
+          )}
+        </View>
       </View>
     </Modal>
   );
@@ -716,4 +866,22 @@ const styles = StyleSheet.create({
   },
   viewerTitle: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
   viewerClose: { color: '#4DA3FF', fontSize: 17, fontWeight: '700' },
+  flex: { flex: 1 },
+  viewerTools: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    backgroundColor: '#111',
+  },
+  toolText: { color: '#FFFFFF', fontSize: 17, fontWeight: '600' },
+  toolPrimary: { color: '#4DA3FF', fontWeight: '800' },
+  toolNote: { color: '#AAA', fontSize: 14 },
+  hidden: {
+    position: 'absolute',
+    backgroundColor: 'rgba(120,120,128,0.92)',
+    borderRadius: 3,
+  },
+  hiddenPending: { backgroundColor: 'rgba(77,163,255,0.35)', borderWidth: 2, borderColor: '#4DA3FF' },
 });

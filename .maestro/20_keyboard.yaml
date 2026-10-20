@@ -29,7 +29,7 @@ name: Everytool keyboard - enable, Full Access, clipboard tab inserts a saved cl
 - tapOn:
     id: "kb.tab.Clipboard"
 - assertVisible: "Paste"
-- assertVisible: "Saved · tap to insert"
+- assertVisible: "Saved · tap to insert.*"
 - takeScreenshot: 20-keyboard-clipboard
 - tapOn: "Maestro clip edited"
 - tapOn:

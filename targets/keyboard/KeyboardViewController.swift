@@ -40,6 +40,9 @@ final class KeyboardViewController: UIInputViewController {
   private var symbols = false
   private var symbolsPage2 = false
   private var lastSpaceAt: Date?
+  /// Snippet shortcut word → clip text, refreshed whenever the keyboard
+  /// appears (the app is where shortcuts are set).
+  private var snippets: [String: String] = [:]
   private var editor: ClipEditor?
   private var confirmClearUntil: Date?
 
@@ -94,6 +97,7 @@ final class KeyboardViewController: UIInputViewController {
 
   override func viewWillAppear(_ animated: Bool) {
     super.viewWillAppear(animated)
+    loadSnippets()
     // Refresh whichever tab is showing: clips may have changed in the app.
     showTab(currentTab)
   }
@@ -464,7 +468,44 @@ final class KeyboardViewController: UIInputViewController {
     if editor == nil { textDocumentProxy.adjustTextPosition(byCharacterOffset: 1) }
   }
 
+  private func loadSnippets() {
+    guard hasFullAccess else {
+      snippets = [:]
+      return
+    }
+    var map: [String: String] = [:]
+    for clip in SharedVault.clips() {
+      if let word = (clip["shortcut"] as? String)?.lowercased(), !word.isEmpty,
+        let text = clip["text"] as? String
+      {
+        map[word] = text
+      }
+    }
+    snippets = map
+  }
+
+  /// Snippets: if the word just typed is a clip's shortcut, replace it
+  /// with the clip's text. Same rule as src/lib/clips.ts matchSnippet.
+  /// Returns true when it expanded.
+  private func expandSnippet() -> Bool {
+    guard editor == nil, !snippets.isEmpty else { return false }
+    let before = textDocumentProxy.documentContextBeforeInput ?? ""
+    guard let last = before.last, !last.isWhitespace else { return false }
+    let word = String(before.reversed().prefix { !$0.isWhitespace }.reversed())
+    guard word.count >= 2, word.count <= 16, let text = snippets[word.lowercased()] else {
+      return false
+    }
+    for _ in 0..<word.count { textDocumentProxy.deleteBackward() }
+    textDocumentProxy.insertText(text)
+    return true
+  }
+
   @objc private func spaceTapped() {
+    if expandSnippet() {
+      textDocumentProxy.insertText(" ")
+      lastSpaceAt = nil
+      return
+    }
     // Double-tap space ends the sentence, like the system keyboard.
     if let last = lastSpaceAt, Date().timeIntervalSince(last) < 0.3 {
       backspace()
@@ -601,12 +642,13 @@ final class KeyboardViewController: UIInputViewController {
       stack.addArrangedSubview(label)
       return
     }
-    stack.addArrangedSubview(sectionLabel("Saved · tap to insert"))
+    stack.addArrangedSubview(sectionLabel("Saved · tap to insert · [word] + space expands"))
     for clip in clips {
       guard let text = clip["text"] as? String else { continue }
       let id = clip["id"] as? String
       let pinned = (clip["pinned"] as? Bool) ?? false
-      stack.addArrangedSubview(clipRow(id: id, text: text, pinned: pinned))
+      let shortcut = (clip["shortcut"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+      stack.addArrangedSubview(clipRow(id: id, text: text, pinned: pinned, shortcut: shortcut))
     }
   }
 
@@ -633,7 +675,7 @@ final class KeyboardViewController: UIInputViewController {
 
   /// One clip: tap the text to insert it; the icons copy, edit, pin and
   /// delete. A row with id == nil is the live pasteboard (save only).
-  private func clipRow(id: String?, text: String, pinned: Bool) -> UIView {
+  private func clipRow(id: String?, text: String, pinned: Bool, shortcut: String? = nil) -> UIView {
     let tag = registerRow(id: id, text: text)
     let row = UIStackView()
     row.axis = .horizontal
@@ -641,7 +683,7 @@ final class KeyboardViewController: UIInputViewController {
     row.alignment = .center
 
     let main = UIButton(type: .system)
-    main.setTitle((pinned ? "★ " : "") + text, for: .normal)
+    main.setTitle((pinned ? "★ " : "") + (shortcut.map { "[\($0)] " } ?? "") + text, for: .normal)
     main.setTitleColor(.label, for: .normal)
     main.titleLabel?.font = .systemFont(ofSize: 15)
     main.titleLabel?.numberOfLines = 2

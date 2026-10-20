@@ -41,6 +41,7 @@ export function PdfScreen({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [seeded, setSeeded] = useState(false);
+  const [shrinkPhotos, setShrinkPhotos] = useState(true);
 
   if (initialPdf && !seeded) {
     setSeeded(true);
@@ -119,7 +120,7 @@ export function PdfScreen({
         if (!first || first.kind !== 'pdf')
           throw new Error('Add a PDF first.');
         setBeforeBytes(new File(first.uri).size ?? 0);
-        setResult(await compressPdf(first.uri));
+        setResult(await compressPdf(first.uri, { photos: shrinkPhotos }));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'That didn’t work.');
@@ -193,6 +194,20 @@ export function PdfScreen({
         </>
       )}
 
+      {mode === 'compress' && sources[0] && (
+        <Segmented
+          options={[
+            { id: 'photos', label: 'Shrink photos too' },
+            { id: 'lossless', label: 'Keep photos as-is' },
+          ]}
+          value={shrinkPhotos ? 'photos' : 'lossless'}
+          onChange={(v) => {
+            setShrinkPhotos(v === 'photos');
+            setResult(null);
+          }}
+        />
+      )}
+
       {sources.length > 0 && mode === 'merge' && (
         <Text style={type.small}>{totalPages} pages in order</Text>
       )}
@@ -223,8 +238,12 @@ export function PdfScreen({
           {mode === 'compress' && beforeBytes > 0 && (
             <Text style={type.small}>
               {result.shrunk === false
-                ? 'Already as small as Everytool can make it — PDFs made of photos don’t shrink with this method.'
-                : `Was ${formatBytes(beforeBytes)} — saved ${formatBytes(Math.max(0, beforeBytes - result.bytes))}`}
+                ? shrinkPhotos
+                  ? 'Already as small as Everytool can make it.'
+                  : 'Already as small as it gets without touching the photos — try “Shrink photos too”.'
+                : `Was ${formatBytes(beforeBytes)} — saved ${formatBytes(Math.max(0, beforeBytes - result.bytes))}${
+                    result.photosShrunk ? ` · ${result.photosShrunk} photo${result.photosShrunk === 1 ? '' : 's'} made smaller` : ''
+                  }`}
             </Text>
           )}
           <PrimaryButton

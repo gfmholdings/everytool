@@ -1,6 +1,6 @@
 // PDF operations on bytes — pure pdf-lib, no file system, unit-tested in
 // Node (tests/pdf.test.ts). src/lib/pdf.ts does the file I/O around them.
-import { PDFDocument, PDFName } from 'pdf-lib';
+import { PDFArray, PDFDocument, PDFName, PDFNumber, PDFRawStream } from 'pdf-lib';
 
 export interface PdfInput {
   kind: 'pdf' | 'image';
@@ -102,4 +102,79 @@ export async function compressPdfBytes(
     return { bytes, pages: doc.getPageCount(), shrunk: false };
   }
   return { ...saved, shrunk: true };
+}
+
+// ---------------------------------------------------------------------------
+// Real compression: recompress the photos inside a PDF.
+// ---------------------------------------------------------------------------
+
+/** Re-encodes one JPEG (the platform does this natively). null = keep original. */
+export type JpegReencoder = (
+  jpeg: Uint8Array,
+  width: number,
+  height: number,
+) => Promise<{ bytes: Uint8Array; width: number; height: number } | null>;
+
+export interface ShrinkReport extends PdfOutput {
+  shrunk: boolean;
+  /** JPEG photos found / actually replaced with a smaller version. */
+  images: number;
+  replaced: number;
+}
+
+function isDct(filter: unknown): boolean {
+  const dct = PDFName.of('DCTDecode');
+  if (filter === dct) return true;
+  return filter instanceof PDFArray && filter.size() === 1 && filter.get(0) === dct;
+}
+
+/**
+ * Recompress every JPEG photo (DCTDecode image XObject) larger than
+ * `minBytes` with `reencode` — typically: cap the long side and lower the
+ * JPEG quality. A photo is only replaced when its new version is at least
+ * 10% smaller. Everything else (text, vector art, fonts, forms) is left
+ * byte-for-byte as it was. Never returns a bigger file.
+ */
+export async function shrinkPdfImages(
+  bytes: Uint8Array,
+  reencode: JpegReencoder,
+  opts: { minBytes?: number } = {},
+): Promise<ShrinkReport> {
+  const minBytes = opts.minBytes ?? 30_000;
+  const doc = await PDFDocument.load(bytes, LOAD);
+  const ctx = doc.context;
+  let images = 0;
+  let replaced = 0;
+  for (const [ref, obj] of ctx.enumerateIndirectObjects()) {
+    if (!(obj instanceof PDFRawStream)) continue;
+    const dict = obj.dict;
+    if (dict.get(PDFName.of('Subtype')) !== PDFName.of('Image')) continue;
+    if (!isDct(dict.get(PDFName.of('Filter')))) continue;
+    images += 1;
+    if (obj.contents.length < minBytes) continue;
+    const w = dict.lookupMaybe(PDFName.of('Width'), PDFNumber)?.asNumber() ?? 0;
+    const h = dict.lookupMaybe(PDFName.of('Height'), PDFNumber)?.asNumber() ?? 0;
+    if (w <= 0 || h <= 0) continue;
+    let next: Awaited<ReturnType<JpegReencoder>> = null;
+    try {
+      next = await reencode(obj.contents, w, h);
+    } catch {
+      next = null;
+    }
+    if (!next || next.bytes.length > obj.contents.length * 0.9) continue;
+    dict.set(PDFName.of('Width'), PDFNumber.of(next.width));
+    dict.set(PDFName.of('Height'), PDFNumber.of(next.height));
+    dict.set(PDFName.of('BitsPerComponent'), PDFNumber.of(8));
+    dict.set(PDFName.of('ColorSpace'), PDFName.of('DeviceRGB'));
+    dict.set(PDFName.of('Length'), PDFNumber.of(next.bytes.length));
+    dict.delete(PDFName.of('Decode'));
+    dict.delete(PDFName.of('DecodeParms'));
+    ctx.assign(ref, PDFRawStream.of(dict, next.bytes));
+    replaced += 1;
+  }
+  const saved = await finish(doc);
+  if (replaced === 0 || saved.bytes.length >= bytes.length) {
+    return { bytes, pages: doc.getPageCount(), shrunk: false, images, replaced: 0 };
+  }
+  return { ...saved, shrunk: true, images, replaced };
 }

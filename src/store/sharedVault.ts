@@ -1,6 +1,7 @@
 import { requireOptionalNativeModule } from 'expo-modules-core';
 
 import { APP_GROUP_ID, BROADCAST_EXTENSION_ID } from '../config';
+import type { TextBox } from '../lib/receipt';
 import type { AppState } from '../types';
 
 /**
@@ -21,6 +22,10 @@ interface SharedVaultNative {
   takePendingTool(groupId: string): string | null;
   readGroupString?(groupId: string, key: string): string | null;
   writeGroupString?(groupId: string, key: string, value: string | null): boolean;
+  reloadWidgets?(): void;
+  recognizeText?(uri: string): Promise<TextBox[]>;
+  stripLocation?(inputUri: string, outputUri: string): boolean;
+  imageHasLocation?(uri: string): boolean;
   showBroadcastPicker?(extensionBundleId: string): Promise<boolean>;
   requestNotificationPermission?(): Promise<boolean>;
 }
@@ -65,6 +70,11 @@ export function parseState(json: string | null | undefined): AppState | null {
         ? parsed.clips.filter((c) => c && typeof c.text === 'string' && typeof c.id === 'string')
         : [],
       qrHistory: Array.isArray(parsed.qrHistory) ? parsed.qrHistory : [],
+      countdowns: Array.isArray(parsed.countdowns)
+        ? parsed.countdowns.filter(
+            (c) => c && typeof c.title === 'string' && typeof c.date === 'number',
+          )
+        : [],
     };
   } catch {
     return null;
@@ -131,5 +141,37 @@ export function writeGroupString(key: string, value: string | null): void {
     native.writeGroupString(APP_GROUP_ID, key, value);
   } catch {
     // best effort
+  }
+}
+
+export function reloadWidgets(): void {
+  try {
+    native?.reloadWidgets?.();
+  } catch {
+    // widgets refresh on their own schedule anyway
+  }
+}
+
+/** On-device OCR. null when unavailable (Expo Go). */
+export async function recognizeText(uri: string): Promise<TextBox[] | null> {
+  if (!native?.recognizeText) return null;
+  return native.recognizeText(uri);
+}
+
+/** Lossless copy without GPS/XMP. false when unavailable or failed. */
+export function stripLocation(inputUri: string, outputUri: string): boolean {
+  try {
+    return native?.stripLocation?.(inputUri, outputUri) ?? false;
+  } catch {
+    return false;
+  }
+}
+
+/** null when it can't be checked here. */
+export function imageHasLocation(uri: string): boolean | null {
+  try {
+    return native?.imageHasLocation ? native.imageHasLocation(uri) : null;
+  } catch {
+    return null;
   }
 }

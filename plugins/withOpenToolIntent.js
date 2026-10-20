@@ -1,4 +1,5 @@
-// Copies targets/controls/OpenToolIntent.swift into the main app target.
+// Copies the App Intents sources into the main app target:
+// targets/controls/OpenToolIntent.swift and ios-app/EverytoolIntents.swift.
 //
 // Control Center controls whose intent opens the app (openAppWhenRun)
 // must ship that intent in the app too: iOS performs it in the app
@@ -9,30 +10,34 @@ const fs = require('fs');
 const path = require('path');
 const { IOSConfig, withXcodeProject } = require('expo/config-plugins');
 
-const FILE = 'OpenToolIntent.swift';
+// [source (relative to the project root), file name in the app target]
+const FILES = [
+  ['targets/controls/OpenToolIntent.swift', 'OpenToolIntent.swift'],
+  // Siri & Shortcuts actions + AppShortcutsProvider
+  ['ios-app/EverytoolIntents.swift', 'EverytoolIntents.swift'],
+];
 
 module.exports = function withOpenToolIntent(config) {
   return withXcodeProject(config, (cfg) => {
     const project = cfg.modResults;
     const { projectRoot, platformProjectRoot } = cfg.modRequest;
     const projectName = IOSConfig.XcodeUtils.getProjectName(projectRoot);
-    const src = path.join(projectRoot, 'targets', 'controls', FILE);
     const destDir = path.join(platformProjectRoot, projectName);
     fs.mkdirSync(destDir, { recursive: true });
-    fs.copyFileSync(src, path.join(destDir, FILE));
-
     const target = IOSConfig.XcodeUtils.getApplicationNativeTarget({
       project,
       projectName,
     });
-    const already = project.hasFile(`${projectName}/${FILE}`);
-    if (!already) {
-      IOSConfig.XcodeUtils.addBuildSourceFileToGroup({
-        filepath: `${projectName}/${FILE}`,
-        groupName: projectName,
-        project,
-        targetUuid: target.uuid,
-      });
+    for (const [from, name] of FILES) {
+      fs.copyFileSync(path.join(projectRoot, from), path.join(destDir, name));
+      if (!project.hasFile(`${projectName}/${name}`)) {
+        IOSConfig.XcodeUtils.addBuildSourceFileToGroup({
+          filepath: `${projectName}/${name}`,
+          groupName: projectName,
+          project,
+          targetUuid: target.uuid,
+        });
+      }
     }
     return cfg;
   });

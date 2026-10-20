@@ -14,7 +14,7 @@ import {
 import { parseInboxIndex } from '../src/lib/inboxIndex.ts';
 import type { AppState } from '../src/types.ts';
 
-const empty: AppState = { clips: [], qrHistory: [] };
+const empty: AppState = { clips: [], qrHistory: [], countdowns: [] };
 
 test('clips: save trims, ignores blanks', () => {
   assert.equal(addClip(empty, '   ').clip, null);

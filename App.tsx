@@ -146,6 +146,8 @@ function Root() {
         openTool('convert', { image: { uri, width: 0, height: 0 } });
       } else if (item.tool === 'resize') {
         openTool('resize', { image: { uri, width: 0, height: 0 } });
+      } else if (item.tool === 'qr') {
+        openTool('qr', { image: { uri, width: 0, height: 0 } });
       } else {
         openTool(item.tool);
       }
@@ -257,7 +259,7 @@ function Root() {
       );
       break;
     case 'qr':
-      screen = <QrScreen onBack={back} notify={notify} />;
+      screen = <QrScreen onBack={back} notify={notify} initialImage={pending?.image?.uri} />;
       break;
     case 'resize':
       screen = (
@@ -275,7 +277,7 @@ function Root() {
       screen = <TextScreen onBack={back} notify={notify} />;
       break;
     case 'days':
-      screen = <DaysScreen onBack={back} />;
+      screen = <DaysScreen onBack={back} notify={notify} />;
       break;
     case 'split':
       screen = <SplitScreen onBack={back} />;

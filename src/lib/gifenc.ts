@@ -94,6 +94,7 @@ export function encodeGif(
   width: number,
   height: number,
   delayCs: number,
+  palette?: Uint8Array,
 ): Uint8Array {
   const bytes: number[] = [];
   const pushStr = (s: string) => {
@@ -106,7 +107,11 @@ export function encodeGif(
   push16(width);
   push16(height);
   bytes.push(0xf7, 0, 0); // 256-entry global palette
-  bytes.push(...gifPalette());
+  if (palette) {
+    for (let i = 0; i < 768; i += 1) bytes.push(palette[i] ?? 0);
+  } else {
+    bytes.push(...gifPalette());
+  }
   bytes.push(0x21, 0xff, 11);
   pushStr('NETSCAPE2.0');
   bytes.push(3, 1, 0, 0, 0); // loop forever
@@ -129,3 +134,149 @@ export function encodeGif(
   bytes.push(0x3b);
   return new Uint8Array(bytes);
 }
+
+// ---------------------------------------------------------------------------
+// Better colour: one adaptive 256-colour palette for the whole clip
+// (median cut over sampled pixels of every frame) + 4×4 ordered dithering.
+// One shared palette keeps colours stable from frame to frame (no
+// flicker) and the dither pattern is fixed, so still areas stay still.
+// ---------------------------------------------------------------------------
+
+interface Box {
+  px: Uint8Array; // packed r,g,b triples
+  n: number;
+}
+
+function channelRange(b: Box, c: number): number {
+  let lo = 255;
+  let hi = 0;
+  for (let i = 0; i < b.n; i += 1) {
+    const v = b.px[i * 3 + c]!;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  return hi - lo;
+}
+
+/** Median-cut palette (768 bytes, RGB × 256) from sampled frame pixels. */
+export function buildPalette(frames: Uint8Array[], size = 256, maxSamples = 60000): Uint8Array {
+  const total = frames.reduce((n, f) => n + f.length / 4, 0);
+  const step = Math.max(1, Math.floor(total / maxSamples));
+  const samples: number[] = [];
+  let k = 0;
+  for (const f of frames) {
+    for (let i = 0; i < f.length; i += 4) {
+      if (k++ % step === 0) samples.push(f[i]!, f[i + 1]!, f[i + 2]!);
+    }
+  }
+  const boxes: Box[] = [{ px: Uint8Array.from(samples), n: samples.length / 3 }];
+  while (boxes.length < size) {
+    // split the box with the widest channel range (and >1 pixel)
+    let bi = -1;
+    let best = -1;
+    let bc = 0;
+    for (let i = 0; i < boxes.length; i += 1) {
+      const b = boxes[i]!;
+      if (b.n < 2) continue;
+      for (let c = 0; c < 3; c += 1) {
+        const r = channelRange(b, c);
+        if (r > best) {
+          best = r;
+          bi = i;
+          bc = c;
+        }
+      }
+    }
+    if (bi < 0 || best <= 0) break;
+    const b = boxes[bi]!;
+    const idx = Array.from({ length: b.n }, (_, i) => i).sort(
+      (x, y) => b.px[x * 3 + bc]! - b.px[y * 3 + bc]!,
+    );
+    const mid = Math.floor(b.n / 2);
+    const make = (from: number, to: number): Box => {
+      const px = new Uint8Array((to - from) * 3);
+      for (let i = from; i < to; i += 1) px.set(b.px.subarray(idx[i]! * 3, idx[i]! * 3 + 3), (i - from) * 3);
+      return { px, n: to - from };
+    };
+    boxes.splice(bi, 1, make(0, mid), make(mid, b.n));
+  }
+  const pal = new Uint8Array(768);
+  boxes.forEach((b, i) => {
+    let r = 0;
+    let g = 0;
+    let bl = 0;
+    for (let j = 0; j < b.n; j += 1) {
+      r += b.px[j * 3]!;
+      g += b.px[j * 3 + 1]!;
+      bl += b.px[j * 3 + 2]!;
+    }
+    const n = Math.max(1, b.n);
+    pal[i * 3] = Math.round(r / n);
+    pal[i * 3 + 1] = Math.round(g / n);
+    pal[i * 3 + 2] = Math.round(bl / n);
+  });
+  return pal;
+}
+
+const BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+
+/** Map one RGBA frame onto the palette with 4×4 ordered dithering. */
+export function quantizeWithPalette(
+  rgba: Uint8Array,
+  width: number,
+  palette: Uint8Array,
+  dither = true,
+  cache: Int16Array = new Int16Array(32768).fill(-1),
+): Uint8Array {
+  const pixels = rgba.length / 4;
+  const out = new Uint8Array(pixels);
+  const colors = Math.min(256, palette.length / 3);
+  for (let i = 0; i < pixels; i += 1) {
+    const x = i % width;
+    const y = (i / width) | 0;
+    const d = dither ? (BAYER4[(y & 3) * 4 + (x & 3)]! - 7.5) * 2 : 0;
+    const r = Math.max(0, Math.min(255, rgba[i * 4]! + d));
+    const g = Math.max(0, Math.min(255, rgba[i * 4 + 1]! + d));
+    const b = Math.max(0, Math.min(255, rgba[i * 4 + 2]! + d));
+    const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+    let best = cache[key]!;
+    if (best < 0) {
+      let bestD = Infinity;
+      const cr = (r & ~7) + 4;
+      const cg = (g & ~7) + 4;
+      const cb = (b & ~7) + 4;
+      for (let p = 0; p < colors; p += 1) {
+        const dr = palette[p * 3]! - cr;
+        const dg = palette[p * 3 + 1]! - cg;
+        const db = palette[p * 3 + 2]! - cb;
+        const dist = dr * dr * 2 + dg * dg * 4 + db * db * 3;
+        if (dist < bestD) {
+          bestD = dist;
+          best = p;
+        }
+      }
+      cache[key] = best;
+    }
+    out[i] = best;
+  }
+  return out;
+}
+
+/** The frame plan (pure): start/length clamped to the clip, frame times in ms. */
+export function planGif(o: {
+  durationSec: number;
+  startSec?: number;
+  lengthSec?: number;
+  fps?: number;
+}): { times: number[]; fps: number } {
+  const fps = Math.max(1, Math.min(15, Math.round(o.fps ?? GIF_FPS)));
+  const dur = o.durationSec > 0 ? o.durationSec : GIF_MAX_SECONDS;
+  const start = Math.max(0, Math.min(o.startSec ?? 0, Math.max(0, dur - 0.2)));
+  const length = Math.max(0.2, Math.min(o.lengthSec ?? GIF_MAX_SECONDS, 10, dur - start));
+  const count = Math.max(1, Math.floor(length * fps));
+  return {
+    fps,
+    times: Array.from({ length: count }, (_, i) => Math.round((start + i / fps) * 1000)),
+  };
+}
+

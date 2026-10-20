@@ -1,0 +1,22 @@
+appId: app.everytool.ios
+name: Split bill - read a receipt photo on-device (Vision) and split by item
+# Uses the system photo picker (out-of-process UI); non-blocking.
+---
+- launchApp
+- tapOn: "Open Split bill"
+- tapOn: "By item"
+- tapOn: "From a photo"
+- extendedWaitUntil:
+    visible: "Photos|Recents|Albums"
+    timeout: 15000
+- tapOn:
+    point: 15%, 30%
+- tapOn:
+    text: "Add|Done|Choose"
+    optional: true
+- extendedWaitUntil:
+    visible: "Read 3 items.*"
+    timeout: 30000
+- assertVisible: "Burger"
+- assertVisible: "\\$12\\.50"
+- takeScreenshot: 14-receipt

@@ -20,6 +20,7 @@ name: PDF tools - shared PDF, split pages, compress
     visible: "2 pages · .*"
     timeout: 20000
 - tapOn: "Compress"
+- assertVisible: "Shrink photos too"
 - tapOn:
     text: "Compress"
     index: 1

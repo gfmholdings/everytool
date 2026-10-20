@@ -148,3 +148,56 @@ has no file system code; `src/lib/pdf.ts` only does the file I/O. Tested in
   - **Bug fixed:** compress could return a file *bigger* than the original.
     It now never does; the screen says "Already as small as Everytool can
     make it" instead.
+
+## Feature pass: setting each tool apart from rivals
+
+Each feature's logic is a pure module with its own unit tests. Native and
+UI code is checked by typecheck, lint, the iOS project generation, and the
+simulator flows listed.
+
+| Feature | Where | Unit tests (here) | Simulator flow (needs a Mac) |
+|---|---|---|---|
+| **Siri & Shortcuts:** 15 actions in total; detail below. | `ios-app/EverytoolIntents.swift`, copied into the app target by `plugins/withOpenToolIntent.js` | n/a (Swift) | CI checks all 15 are registered in `Metadata.appintents` |
+| **Snippets:** a clip's word + space expands in the keyboard | `lib/clips.ts`, Clipboard screen, keyboard `expandSnippet` | `features.test.ts` | `03` sets a word; `20` runs the keyboard (non-blocking) |
+| **Long screenshot "Hide details":** drag boxes, Apply re-writes the PNG pixelated (no re-matching) | `stitchCore.ts PixelateSink`, `stitch.ts renderStitch`, viewer | `stitch.test.ts`: blocks are flat, everything outside the box is identical | `11` draws a box and applies it |
+| **PDF "Shrink photos too":** JPEG photos inside a PDF are recompressed (long side ≤ 1600 px, quality 60%) | `pdfCore.ts shrinkPdfImages` | `pdf.test.ts`: about 3× smaller, still valid, layout kept, failing encoders safe | `09` |
+| **Convert:** many photos at once to JPG/PNG (Save all, per-file Share); "No location" makes a lossless copy without GPS/XMP and shows it's verified | ConvertScreen, native `stripLocation` / `imageHasLocation` | n/a (native) | `07` |
+| **Resize:** Email, WhatsApp, Instagram and Tiny presets | ResizeScreen | n/a | `08` |
+| **QR:** scan a shared screenshot (new "Scan QR code" share route); "Check before you open" shows the real site and flags tricks | `lib/linkCheck.ts`, QrScreen, share extension | `features.test.ts`: 9 trick kinds; no false alarm on `bbc.co.uk` or `first.example.com` | `13` |
+| **Days:** saved countdowns + Countdown widget (Home, and Lock Screen circular/rectangular/inline); refreshed when countdowns change and at every midnight | `lib/countdowns.ts`, DaysScreen, `CountdownWidget.swift` | `features.test.ts` | `05` saves one; CI checks the widget is in the bundle |
+| **Split bill "By item":** scan a receipt (Apple Vision, on the phone) or add items by hand; tap who shared what; tax and tip follow each person's share, to the exact cent | `lib/receipt.ts`, SplitScreen, native `recognizeText` | `receipt.test.ts`: line grouping, parsing, comma decimals, exact splitting | `05` by hand (blocking); `14` receipt photo (non-blocking: system photo picker) |
+| **GIF:** start point, length up to 10 s, 6/10/15 fps, 3 sizes, "Best colour" (one adaptive palette + ordered dithering) | `gifenc.ts`, `gif.ts`, GifScreen | `features.test.ts`: colour error under half of the fixed palette's; frame plan clamping | not automated (system video picker) |
+
+The 15 Siri & Shortcuts actions:
+
+- **Open any tool**
+- **Long screenshot:** Start Long Screenshot, Stitch Screenshots
+- **Clipboard:** Save to Clipboard, Get Clips
+- **Text:** Count Words; Find Links, Emails or Phone Numbers
+- **Days & bills:** Days Until, Split a Bill
+- **QR:** Make QR Code
+- **Images:** Convert Image, Resize Image, Remove Location from Photo
+- **PDF:** Merge PDFs
+- **Control Center:** the controls' `OpenToolIntent`
+
+Siri phrases are provided for 10 of them.
+
+Audit results for this tree:
+
+- `tsc` clean.
+- `eslint` 0 errors, 0 warnings.
+- `npm test` 80/80.
+- `expo prebuild` generates:
+  - App target: AppDelegate, OpenToolIntent, EverytoolIntents (plus the shared vault).
+  - Controls extension: 13 controls + the Countdown widget.
+  - All 6 targets carry the App Group.
+
+**Not verified yet (needs a Mac and a phone):**
+
+- Swift compilation of the new native code: intents, widget, Vision/ImageIO module functions, keyboard snippets.
+- Every simulator flow above.
+- On a real device:
+  - Siri voice phrases.
+  - Adding the widget and the controls.
+  - Receipt OCR on real receipts.
+  - Snippet expansion in third-party apps.

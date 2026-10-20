@@ -103,6 +103,7 @@ final class ShareModel: ObservableObject {
         return [
             ("convert", "Convert"),
             ("resize", "Resize"),
+            ("qr", "Scan QR code"),
             ("stitch", "Stitch"),
         ]
     }

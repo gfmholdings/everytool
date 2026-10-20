@@ -12,8 +12,9 @@ import {
 import { AppState as RNAppState } from 'react-native';
 
 import * as ops from '../lib/clips';
+import { addCountdown as addCd, deleteCountdown as delCd } from '../lib/countdowns';
 import { type AppState, type Clip, type QrHistoryItem, emptyState } from '../types';
-import { parseState, readSharedState, writeSharedState } from './sharedVault';
+import { parseState, readSharedState, reloadWidgets, writeSharedState } from './sharedVault';
 
 const KEY = 'everytool.state.v1';
 
@@ -22,6 +23,10 @@ interface StoreApi {
   state: AppState;
   addClip: (text: string) => Clip | null;
   updateClip: (id: string, text: string) => void;
+  /** Returns a problem in plain words, or null when saved. */
+  setClipShortcut: (id: string, shortcut: string) => string | null;
+  addCountdown: (title: string, date: Date) => void;
+  deleteCountdown: (id: string) => void;
   togglePin: (id: string) => void;
   deleteClip: (id: string) => void;
   clearUnpinnedClips: () => void;
@@ -38,6 +43,9 @@ const StoreContext = createContext<StoreApi>({
   state: emptyState,
   addClip: () => null,
   updateClip: noop,
+  setClipShortcut: () => null,
+  addCountdown: noop,
+  deleteCountdown: noop,
   togglePin: noop,
   deleteClip: noop,
   clearUnpinnedClips: noop,
@@ -136,6 +144,20 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         return made;
       },
       updateClip: (id, text) => commit((s) => ops.updateClip(s, id, text)),
+      setClipShortcut: (id, shortcut) => {
+        const problem = ops.shortcutProblem(readSharedState() ?? current.current, id, shortcut);
+        if (problem) return problem;
+        commit((s) => ops.setShortcut(s, id, shortcut));
+        return null;
+      },
+      addCountdown: (title, date) => {
+        commit((s) => addCd(s, title, date));
+        reloadWidgets();
+      },
+      deleteCountdown: (id) => {
+        commit((s) => delCd(s, id));
+        reloadWidgets();
+      },
       togglePin: (id) => commit((s) => ops.togglePin(s, id)),
       deleteClip: (id) => commit((s) => ops.deleteClip(s, id)),
       clearUnpinnedClips: () => commit((s) => ops.clearUnpinned(s)),

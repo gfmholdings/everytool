@@ -2,9 +2,11 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { useMemo, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { Card, Segmented, ToolShell } from '../components/ui';
+import { Card, Field, PrimaryButton, Segmented, ToolShell } from '../components/ui';
+import { daysLeft, describeDaysLeft, sortCountdowns } from '../lib/countdowns';
 import { breakdownYMD, daysBetween, formatBreakdown } from '../lib/dates';
-import { type } from '../theme';
+import { useStore } from '../store/AppStore';
+import { colors, type } from '../theme';
 
 type Mode = 'between' | 'until' | 'age';
 
@@ -31,8 +33,16 @@ function fmt(d: Date): string {
  * Days counter: between two dates, until a date, or age in days. All of
  * it runs on the clamped calendar math in lib/dates (month-end safe).
  */
-export function DaysScreen({ onBack }: { onBack: () => void }) {
-  const [mode, setMode] = useState<Mode>('between');
+export function DaysScreen({
+  onBack,
+  notify,
+}: {
+  onBack: () => void;
+  notify?: (msg: string) => void;
+}) {
+  const { state, addCountdown, deleteCountdown } = useStore();
+  const [title, setTitle] = useState('');
+  const [mode, setMode] = useState<Mode>(state.countdowns.length > 0 ? 'until' : 'between');
   const today = useMemo(() => startOfDay(new Date()), []);
   const [from, setFrom] = useState<Date>(today);
   const [to, setTo] = useState<Date>(() => plusDays(today, 30));
@@ -111,6 +121,53 @@ export function DaysScreen({ onBack }: { onBack: () => void }) {
               {formatBreakdown(breakdownYMD(today, target))}
             </Text>
           </Card>
+          <Field
+            value={title}
+            onChange={setTitle}
+            placeholder="Name it (e.g. Trip to Lisbon)"
+            testID="days.title"
+          />
+          <PrimaryButton
+            label="Save as countdown"
+            onPress={() => {
+              addCountdown(title, target);
+              setTitle('');
+              notify?.('Countdown saved — add the Countdown widget to see it at a glance');
+            }}
+            testID="days.save"
+          />
+          {state.countdowns.length > 0 && (
+            <>
+              <Text style={type.label}>Your countdowns</Text>
+              {sortCountdowns(state.countdowns, today).map((c) => {
+                const n = daysLeft(c, today);
+                return (
+                  <Card key={c.id} style={styles.cdRow}>
+                    <View style={styles.cdMain}>
+                      <Text style={type.body} numberOfLines={1}>
+                        {c.title}
+                      </Text>
+                      <Text style={type.small}>
+                        {fmt(new Date(c.date))} · {describeDaysLeft(n)}
+                      </Text>
+                    </View>
+                    <Text style={[type.num, n < 0 && { color: colors.faint }]}>{Math.abs(n)}</Text>
+                    <Pressable
+                      accessibilityLabel={`Delete ${c.title}`}
+                      onPress={() => deleteCountdown(c.id)}
+                      hitSlop={8}
+                    >
+                      <Text style={styles.cdDelete}>✕</Text>
+                    </Pressable>
+                  </Card>
+                );
+              })}
+              <Text style={type.small}>
+                Home or Lock Screen: touch and hold, tap Edit → Add Widget, choose
+                Everytool → Countdown. It shows your next countdown.
+              </Text>
+            </>
+          )}
         </>
       )}
 
@@ -134,4 +191,7 @@ const styles = StyleSheet.create({
   dateCard: { marginTop: 6, paddingVertical: 14 },
   result: { alignItems: 'center', gap: 2, paddingVertical: 22 },
   breakdown: { marginTop: 6 },
+  cdRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12 },
+  cdMain: { flex: 1, gap: 2 },
+  cdDelete: { fontSize: 16, color: colors.faint, paddingHorizontal: 4 },
 });

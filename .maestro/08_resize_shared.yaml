@@ -24,4 +24,17 @@ name: Resize - shared photo is measured and shrunk
 - extendedWaitUntil:
     visible: "Saved to Photos"
     timeout: 15000
+# one-tap preset (feature pass): WhatsApp keeps a 1600px long side,
+# so this 2400x1800 fixture becomes 1600x1200. Same anchored,
+# retrying Resize tap as above (bare "Resize" also matches the
+# "Resize photo" header), and the runner-proven 60s result wait.
+- tapOn: "WhatsApp"
+- assertVisible: "WhatsApp: matches what chat apps keep"
+- waitForAnimationToEnd
+- tapOn:
+    text: "^Resize$"
+    retryTapIfNoChange: true
+- extendedWaitUntil:
+    visible: "1600 × 1200.*"
+    timeout: 60000
 - takeScreenshot: 08-resize

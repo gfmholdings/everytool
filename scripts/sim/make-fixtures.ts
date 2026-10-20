@@ -8,6 +8,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { PDFDocument, StandardFonts } from 'pdf-lib';
+import QRCode from 'qrcode';
 
 import { PngStreamWriter } from '../../src/lib/deflate.ts';
 
@@ -120,6 +121,14 @@ writePng(join(out, 'photo.png'), 2400, 1800, (y, b) => {
     b[i + 3] = 255;
   }
 });
+
+// A QR code pointing at a look-alike link (for the "check before you
+// open" screen), and a receipt photo (for Split bill → By item).
+await QRCode.toFile(join(out, 'qr-suspicious.png'), 'http://paypal.com.account-verify.example/login', {
+  width: 600,
+  margin: 4,
+});
+writeFileSync(join(out, 'receipt.png'), readFileSync(new URL('../../tests/fixtures/receipt.png', import.meta.url)));
 
 const pdf = await PDFDocument.create();
 const font = await pdf.embedFont(StandardFonts.Helvetica);

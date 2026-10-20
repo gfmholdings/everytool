@@ -2,13 +2,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFNumber, PDFRawStream, StandardFonts } from 'pdf-lib';
 
 import {
   compressPdfBytes,
   extractPdfBytes,
   mergePdfBytes,
   pageCountOf,
+  shrinkPdfImages,
 } from '../src/lib/pdfCore.ts';
 import { specToIndices } from '../src/lib/pages.ts';
 
@@ -120,4 +121,68 @@ test('pdf compress: form fields survive', async () => {
 
 test('pdf: garbage input is rejected, not crashed on', async () => {
   await assert.rejects(pageCountOf(new Uint8Array([1, 2, 3])));
+});
+
+
+const SMALL = new Uint8Array(readFileSync(new URL('./fixtures/photo-small.jpg', import.meta.url)));
+
+async function photoPdf(n: number) {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (let i = 0; i < n; i += 1) {
+    const img = await doc.embedJpg(JPG); // a separate copy per page, like scanned PDFs
+    const page = doc.addPage([400, 340]);
+    page.drawImage(img, { x: 0, y: 40, width: 400, height: 300 });
+    page.drawText(`caption ${i + 1}`, { x: 10, y: 10, size: 12, font });
+  }
+  return doc.save();
+}
+
+test('pdf shrink photos: JPEGs are replaced, PDF stays valid, much smaller', async () => {
+  const src = await photoPdf(4);
+  const seen: [number, number][] = [];
+  const out = await shrinkPdfImages(src, async (_jpeg, w, h) => {
+    seen.push([w, h]);
+    return { bytes: SMALL, width: 200, height: 150 };
+  });
+  assert.equal(out.images, 4);
+  assert.equal(out.replaced, 4);
+  assert.equal(out.shrunk, true);
+  assert.deepEqual(seen[0], [400, 300]);
+  assert.ok(out.bytes.length < src.length / 3, `${out.bytes.length} vs ${src.length}`);
+  const doc = await PDFDocument.load(out.bytes);
+  assert.equal(doc.getPageCount(), 4);
+  // page geometry unchanged: images are drawn at the same size, just fewer pixels
+  assert.deepEqual(doc.getPages().map((p) => Math.round(p.getWidth())), [400, 400, 400, 400]);
+  let imagesFound = 0;
+  for (const [, obj] of doc.context.enumerateIndirectObjects()) {
+    if (obj instanceof PDFRawStream && obj.dict.get(PDFName.of('Subtype')) === PDFName.of('Image')) {
+      imagesFound += 1;
+      assert.equal(obj.dict.lookup(PDFName.of('Width'), PDFNumber).asNumber(), 200);
+      assert.equal(obj.contents.length, SMALL.length);
+    }
+  }
+  assert.equal(imagesFound, 4);
+});
+
+test('pdf shrink photos: a re-encode that is not smaller keeps the original', async () => {
+  const src = await photoPdf(1);
+  const out = await shrinkPdfImages(src, async (jpeg, w, h) => ({ bytes: jpeg, width: w, height: h }));
+  assert.equal(out.shrunk, false);
+  assert.equal(out.bytes, src);
+});
+
+test('pdf shrink photos: text-only PDFs and failing encoders are safe', async () => {
+  const text = await labeled(2);
+  const out = await shrinkPdfImages(text, async () => {
+    throw new Error('boom');
+  });
+  assert.equal(out.images, 0);
+  assert.equal(out.shrunk, false);
+  const photos = await photoPdf(2);
+  const failed = await shrinkPdfImages(photos, async () => {
+    throw new Error('decoder failed');
+  });
+  assert.equal(failed.replaced, 0);
+  assert.equal(await pageCountOf(failed.bytes), 2);
 });

@@ -2,12 +2,13 @@ import { CameraView, scanFromURLAsync, useCameraPermissions } from 'expo-camera'
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { File } from 'expo-file-system';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
 import { Card, Field, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
 import { saveToPhotos, shareFile, tempFileUri } from '../lib/files';
+import { checkLink } from '../lib/linkCheck';
 import { describePayload, wifiPayload, contactPayload, type WifiSecurity } from '../lib/qrpayload';
 import { useStore } from '../store/AppStore';
 import { colors, type } from '../theme';
@@ -18,9 +19,12 @@ type Kind = 'text' | 'wifi' | 'contact';
 export function QrScreen({
   onBack,
   notify,
+  initialImage,
 }: {
   onBack: () => void;
   notify: (msg: string) => void;
+  /** An image shared into Everytool to scan for a QR code. */
+  initialImage?: string;
 }) {
   const { state, addQrHistory, deleteQrHistory, clearQrHistory } = useStore();
   const [tab, setTab] = useState<Tab>('make');
@@ -88,18 +92,9 @@ export function QrScreen({
     addQrHistory({ direction: 'scanned', kind: describePayload(value), payload: value });
   };
 
-  const scanFromPhoto = async () => {
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) return;
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 1,
-    });
-    if (res.canceled) return;
-    const asset = res.assets[0];
-    if (!asset) return;
+  const scanImage = async (uri: string) => {
     try {
-      const results = await scanFromURLAsync(asset.uri, ['qr']);
+      const results = await scanFromURLAsync(uri, ['qr']);
       const first = results[0];
       if (first?.data) {
         scannedRef.current = false;
@@ -112,13 +107,38 @@ export function QrScreen({
     }
   };
 
+  const scanFromPhoto = async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) return;
+    const res = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 1,
+    });
+    if (res.canceled) return;
+    const asset = res.assets[0];
+    if (asset) await scanImage(asset.uri);
+  };
+
+  // A screenshot or photo shared into Everytool → scan it straight away.
+  const scannedShared = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialImage || scannedShared.current === initialImage) return;
+    scannedShared.current = initialImage;
+    const t = setTimeout(() => {
+      setTab('scan');
+      void scanImage(initialImage);
+    }, 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialImage]);
+
+  const scannedCheck = scanned ? checkLink(scanned) : null;
+  const openable = scannedCheck != null && scannedCheck.kind !== 'other';
+
   const openScanned = () => {
     if (!scanned) return;
-    if (/^https?:\/\//i.test(scanned) || /^tel:|^mailto:/i.test(scanned)) {
-      void Linking.openURL(scanned);
-    } else {
-      void Clipboard.setStringAsync(scanned).then(() => notify('Copied'));
-    }
+    if (openable) void Linking.openURL(scanned);
+    else void Clipboard.setStringAsync(scanned).then(() => notify('Copied'));
   };
 
   return (
@@ -251,14 +271,47 @@ export function QrScreen({
               <GhostButton label="Scan from a photo" onPress={scanFromPhoto} />
             </>
           )}
-          {scanned && (
+          {scanned && scannedCheck && (
             <Card style={styles.scanCard}>
               <Text style={type.label}>{describePayload(scanned)}</Text>
-              <Text style={type.body}>{scanned}</Text>
+              {scannedCheck.kind === 'url' && (
+                <>
+                  <Text style={type.small}>Goes to</Text>
+                  <Text style={styles.host} selectable>
+                    {scannedCheck.host ?? '—'}
+                  </Text>
+                </>
+              )}
+              <Text style={type.body} selectable>
+                {scanned}
+              </Text>
+              {scannedCheck.warnings.length > 0 ? (
+                <View style={styles.warnBox}>
+                  <Text style={styles.warnTitle}>Check before you open</Text>
+                  {scannedCheck.warnings.map((w) => (
+                    <Text key={w} style={styles.warnLine}>
+                      • {w}
+                    </Text>
+                  ))}
+                </View>
+              ) : (
+                scannedCheck.kind === 'url' && (
+                  <Text style={styles.okLine}>No common tricks found in this link.</Text>
+                )
+              )}
               <PrimaryButton
-                label={/^https?:|^tel:|^mailto:/i.test(scanned) ? 'Open' : 'Copy'}
+                label={openable ? (scannedCheck.risky ? 'Open anyway' : 'Open') : 'Copy'}
                 onPress={openScanned}
+                orange={scannedCheck.risky}
               />
+              {openable && (
+                <GhostButton
+                  label="Copy"
+                  onPress={() =>
+                    void Clipboard.setStringAsync(scanned).then(() => notify('Copied'))
+                  }
+                />
+              )}
             </Card>
           )}
         </>
@@ -315,6 +368,11 @@ const styles = StyleSheet.create({
   cameraWrap: { gap: 8 },
   camera: { width: '100%', height: 340, borderRadius: 16, overflow: 'hidden' },
   scanCard: { gap: 10 },
+  host: { fontSize: 22, fontWeight: '800', color: colors.ink },
+  warnBox: { backgroundColor: '#FFF4E5', borderRadius: 12, padding: 12, gap: 4 },
+  warnTitle: { fontSize: 15, fontWeight: '700', color: '#9A4D00' },
+  warnLine: { fontSize: 14, color: '#7A3E00' },
+  okLine: { fontSize: 14, color: colors.good },
   historyRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   historyMain: { flex: 1, gap: 2 },
   iconButton: { padding: 6 },

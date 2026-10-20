@@ -29,11 +29,22 @@ export function ClipboardScreen({
   onBack: () => void;
   notify: (msg: string) => void;
 }) {
-  const { state, addClip, updateClip, togglePin, deleteClip, clearUnpinnedClips, refresh } =
-    useStore();
+  const {
+    state,
+    addClip,
+    updateClip,
+    setClipShortcut,
+    togglePin,
+    deleteClip,
+    clearUnpinnedClips,
+    refresh,
+  } = useStore();
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');
-  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
+  const [editing, setEditing] = useState<{ id: string; text: string; shortcut: string } | null>(
+    null,
+  );
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
   const [current, setCurrent] = useState<string | null>(null);
 
   const readSystemClipboard = useCallback(async () => {
@@ -174,10 +185,25 @@ export function ClipboardScreen({
             <Card key={clip.id} style={styles.editCard}>
               <Field
                 value={editing.text}
-                onChange={(text) => setEditing({ id: clip.id, text })}
+                onChange={(text) => setEditing({ ...editing, text })}
                 multiline
                 testID="clipboard.edit"
               />
+              <Text style={type.label}>Snippet word (optional)</Text>
+              <TextInput
+                value={editing.shortcut}
+                onChangeText={(shortcut) => {
+                  setShortcutError(null);
+                  setEditing({ ...editing, shortcut });
+                }}
+                placeholder="e.g. addr — type it + space in the Everytool keyboard"
+                placeholderTextColor={colors.faint}
+                autoCapitalize="none"
+                autoCorrect={false}
+                style={styles.search}
+                testID="clipboard.shortcut"
+              />
+              {!!shortcutError && <Text style={styles.error}>{shortcutError}</Text>}
               <View style={styles.row}>
                 <View style={styles.half}>
                   <GhostButton label="Cancel" onPress={() => setEditing(null)} />
@@ -187,6 +213,11 @@ export function ClipboardScreen({
                     label="Save"
                     disabled={!editing.text.trim()}
                     onPress={() => {
+                      const problem = setClipShortcut(clip.id, editing.shortcut);
+                      if (problem) {
+                        setShortcutError(problem);
+                        return;
+                      }
                       updateClip(clip.id, editing.text);
                       setEditing(null);
                       notify('Clip updated');
@@ -209,14 +240,18 @@ export function ClipboardScreen({
                     month: 'short',
                     day: 'numeric',
                   })}
-                  {clip.pinned ? ' · pinned' : ''} · tap to copy
+                  {clip.pinned ? ' · pinned' : ''}
+                  {clip.shortcut ? ` · type “${clip.shortcut}” + space in the keyboard` : ''} · tap to copy
                 </Text>
               </Pressable>
               <View style={styles.actions}>
                 <Action label="Copy" onPress={() => void copy(clip)} />
                 <Action
                   label="Edit"
-                  onPress={() => setEditing({ id: clip.id, text: clip.text })}
+                  onPress={() => {
+                    setShortcutError(null);
+                    setEditing({ id: clip.id, text: clip.text, shortcut: clip.shortcut ?? '' });
+                  }}
                 />
                 <Action
                   label={clip.pinned ? 'Unpin' : 'Pin'}
@@ -293,6 +328,7 @@ const styles = StyleSheet.create({
   clipCard: { gap: 10 },
   editCard: { gap: 10 },
   meta: { marginTop: 4 },
+  error: { color: colors.danger, fontSize: 14 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   action: {
     paddingHorizontal: 11,
