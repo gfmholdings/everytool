@@ -36,7 +36,19 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
     timeout: 20000
 - tapOn:
     id: "clipboard.shortcut"
+- waitForAnimationToEnd
 - inputText: "mcl"
+# PROBE (after runs 6ad8302e + 6ad83868): every step reported
+# success yet the clip saved with an EMPTY shortcut both times —
+# the text field's value was exactly right, so keystrokes work in
+# this card generally. Prove the word is sitting in this field
+# before going on; if this wait dies, the failure dump's hierarchy
+# shows the field's live value/focus and the hunt changes.
+- extendedWaitUntil:
+    visible:
+      id: "clipboard.shortcut"
+      text: "mcl"
+    timeout: 10000
 - scrollUntilVisible:
     element:
       id: "clipboard.edit"
