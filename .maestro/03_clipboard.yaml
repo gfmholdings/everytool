@@ -18,14 +18,17 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
     timeout: 20000
 # edit
 - tapOn: "Edit"
-- tapOn:
-    id: "clipboard.edit"
-- eraseText: 40
-- inputText: "Maestro clip edited"
-# Snippet word for this clip (feature pass): the shortcut field is
-# in the same edit card, above Save. No hideKeyboard (fails on this
-# screen) — scroll-settle onto the field, tap it, type the word,
-# then the proven top-edge Save tap below does the rest.
+# Snippet word FIRST, while the keyboard is still closed (run
+# 6ad8302e): with the keyboard already up from the text field, the
+# shortcut field parks at the keyboard's top edge (its a11y frame was
+# [38,546][364,585], keyboard top ~538) and Maestro's tap on its
+# center landed on the QuickType prediction bar — the prediction
+# "The " was inserted into the still-focused text field and "mcl"
+# followed it there, so the saved clip read "Maestro clip
+# editedThe mcl" with an empty shortcut. Tapping the shortcut field
+# first, keyboard closed, lets the OS scroll it clear as the
+# keyboard rises. No hideKeyboard anywhere in this card (fails on
+# this screen).
 - scrollUntilVisible:
     element:
       id: "clipboard.shortcut"
@@ -34,6 +37,15 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
 - tapOn:
     id: "clipboard.shortcut"
 - inputText: "mcl"
+- scrollUntilVisible:
+    element:
+      id: "clipboard.edit"
+    direction: UP
+    timeout: 20000
+- tapOn:
+    id: "clipboard.edit"
+- eraseText: 40
+- inputText: "Maestro clip edited"
 # The snippet block grew the edit card: with the shortcut field and
 # its hint, the Save button now sits at ~y627 — the whole button is
 # BEHIND the software keyboard (top edge ~538), so the top-edge tap
@@ -50,6 +62,11 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
 # case-sensitive: run 6ad827f8 died here with Element not found while
 # the label sat on screen. Case-insensitive regex, parens escaped
 # (they are literal in the label).
+- scrollUntilVisible:
+    element:
+      text: "(?i)snippet word \\(optional\\)"
+    direction: DOWN
+    timeout: 20000
 - tapOn:
     text: "(?i)snippet word \\(optional\\)"
 - waitForAnimationToEnd
