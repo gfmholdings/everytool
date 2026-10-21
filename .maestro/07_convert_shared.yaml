@@ -9,9 +9,13 @@ name: Convert - photo arriving from the share sheet (app already running)
     visible: "2400 × 1800"
     timeout: 20000
 - tapOn: "Convert to JPG"
+# 90s (was 30s): run 6ad84534's instance was slow across every flow
+# and the failure dump shows the conversion still at "Working…
+# 1 of 1" when 30s expired — in progress, not stuck. Same treatment
+# as the PDF wait below.
 - extendedWaitUntil:
     visible: "Done"
-    timeout: 30000
+    timeout: 90000
 - tapOn: "Save to Photos"
 - extendedWaitUntil:
     visible: "Saved to Photos"

@@ -100,9 +100,16 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
 - extendedWaitUntil:
     visible: ".*Maestro clip edited.*"
     timeout: 20000
-- extendedWaitUntil:
-    visible: ".*type “mcl” \\+ space in the keyboard.*"
-    timeout: 20000
+# No in-flow assert for the row's "type “mcl” + space…" hint: the
+# hint is a child Text of the row's Pressable, and this driver folds
+# the Pressable into a single accessibility element carrying only
+# its label ("Copy <text>") — the meta line is on screen (run
+# 6ad84534's failure screenshot shows it verbatim) but never appears
+# in the accessibility tree Maestro can match. The authoritative
+# proof is the harness vault check after this flow: it reads the
+# shared document the keyboard reads and requires "shortcut":"mcl"
+# in it. Screenshot kept here as the visual record.
+- takeScreenshot: 03-clipboard-edited
 # pin / unpin
 - tapOn: "Pin"
 - assertVisible: "Unpin"
