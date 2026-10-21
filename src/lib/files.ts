@@ -41,12 +41,18 @@ export async function shareFile(uri: string, mimeType: string): Promise<boolean>
  * Resolves a user-facing error message, or null on success.
  */
 export async function saveToPhotos(uri: string): Promise<string | null> {
+  // [saveprobe] TEMPORARY diagnosis (flow 11 save hang, runs
+  // 6ad84f01/6ad85613): breadcrumb each await so the device log shows
+  // exactly where this chain stops. Strip once the hang is explained.
+  console.log(`[saveprobe] saveToPhotos enter ${uri}`);
   try {
     const perm = await MediaLibrary.requestPermissionsAsync(true);
+    console.log(`[saveprobe] permissions resolved granted=${perm.granted} status=${perm.status}`);
     if (!perm.granted) {
       return 'Photo saving is off. Allow “Add Photos Only” for Everytool in Settings → Privacy → Photos.';
     }
     await MediaLibrary.saveToLibraryAsync(uri);
+    console.log('[saveprobe] saveToLibraryAsync resolved');
     return null;
   } catch (e) {
     return e instanceof Error
