@@ -36,7 +36,7 @@ workflows:
       # under Swift 6.1). If the prebuild step fails with "using Swift
       # tools version 6.2.0 but the installed version is 6.1.x", change
       # this pin to `latest` — see CODEMAGIC-SETUP.md.
-      xcode: 16.4
+      xcode: latest
       # Node 22 (not 20): scripts/sim/make-fixtures.ts runs with
       # `node --experimental-strip-types`, which needs Node >= 22.6.
       node: 22
@@ -217,7 +217,7 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 90
     environment:
-      xcode: 16.4
+      xcode: latest
       node: 20
       # All signing/upload values come from the account-side `signing`
       # environment variable group — see CODEMAGIC-SETUP.md for the
