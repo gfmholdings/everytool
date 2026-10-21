@@ -44,7 +44,14 @@ name: Clipboard - save, edit, pin, copy, paste, cut, delete
 # label — in the same ScrollView, right above the focused field, so
 # always on screen while editing — resigns the input, the same
 # mechanism as the "Nothing saved yet" dismissal above.
-- tapOn: "Snippet word (optional)"
+# Case: on the Codemagic iOS 26 lane the label's accessibility text
+# renders ALL-CAPS ("SNIPPET WORD (OPTIONAL)" — the header style's
+# uppercase transform shows through) and Maestro text matching is
+# case-sensitive: run 6ad827f8 died here with Element not found while
+# the label sat on screen. Case-insensitive regex, parens escaped
+# (they are literal in the label).
+- tapOn:
+    text: "(?i)snippet word \\(optional\\)"
 - waitForAnimationToEnd
 # No hideKeyboard: it fails on this screen. Three runs (39365940718,
 # 39367801274, 39370026286) all died at the "Clip updated" wait and

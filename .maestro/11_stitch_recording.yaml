@@ -71,9 +71,15 @@ name: Long screenshot from a finished screen recording (auto-open + auto-stitch)
     direction: DOWN
     timeout: 20000
 - tapOn: "Save to Photos"
+# 60s (was 20s): in run 6ad827f8 the tap is log-proven to have landed
+# on stitch.save, yet neither the "Saved to Photos" toast nor an error
+# appeared within 20s (sibling saves in flows 07/10 confirmed fine).
+# 60s distinguishes a slow save of the 6732px recording stitch from a
+# hang in the recording-path save — if it still never lands, the bug
+# is in the app, not this flow.
 - extendedWaitUntil:
     visible: "Saved to Photos"
-    timeout: 20000
+    timeout: 60000
 - scrollUntilVisible:
     element:
       text: "Copy image"

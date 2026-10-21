@@ -18,9 +18,14 @@ name: Convert - photo arriving from the share sheet (app already running)
     timeout: 15000
 - tapOn: "PDF"
 - tapOn: "Make one PDF"
+# 90s (was 30s): run 6ad827f8 on the Codemagic iOS 26 lane was still
+# at "Preparing page 1 of 1" when the 30s wait expired — no error, the
+# build was simply not done (the JPG stage on the same photo passed
+# seconds earlier). If a future run is STILL preparing at 90s, treat
+# it as a stall in the pdf build on this OS, not slowness.
 - extendedWaitUntil:
     visible: "photos.pdf.*"
-    timeout: 30000
+    timeout: 90000
 # Remove location: lossless copy without GPS, verified natively
 - tapOn: "No location"
 - tapOn: "Remove location"
