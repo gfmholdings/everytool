@@ -334,10 +334,7 @@ export function StitchScreen({
 
   const save = async () => {
     if (!result) return;
-    // [saveprobe] TEMPORARY — see src/lib/files.ts.
-    console.log(`[saveprobe] stitch save tapped from=${resultFrom ?? 'photos'}`);
     const problem = await saveToPhotos(result.uri);
-    console.log(`[saveprobe] stitch save settled problem=${problem ?? 'none'}`);
     if (problem) setError(problem);
     else notify('Saved to Photos');
   };
