@@ -1,0 +1,421 @@
+# Codemagic port of the two GitHub Actions pipelines:
+#   .github/workflows/ios-simulator-tests.yml  ->  simulator-regression
+#   .github/workflows/ios-testflight.yml       ->  testflight
+#
+# MANUAL TRIGGERS ONLY: neither workflow has a `triggering:` section, so
+# Codemagic never starts these builds on push/PR/tag. Every build is
+# started by hand (Codemagic UI or API) — deliberate, after the GitHub
+# minutes burn. Do not add automatic triggers.
+#
+# GitHub -> Codemagic adaptations (behavior preserved; see
+# CODEMAGIC-SETUP.md for the full list):
+#   - $GITHUB_ENV cross-step variables  ->  lines appended to $CM_ENV
+#     (Codemagic loads them at the start of each later step).
+#   - $RUNNER_TEMP                      ->  $CM_BUILD_DIR/build/tmp
+#     (deterministic path, recomputed per step; no persistence needed).
+#   - "Select newest Xcode" step        ->  the `xcode:` pin in
+#     `environment:` below; the step only prints the version.
+#   - Step-level `if:` / `if: always()` / artifact uploads
+#                                       ->  conditionals folded into the
+#     step scripts; uploads are the workflow `artifacts:` section,
+#     which Codemagic collects when the build ends, success or failure.
+#   - ${{ github.run_number }}          ->  Codemagic's $BUILD_NUMBER
+#     plus a fixed offset (see the testflight workflow): Codemagic build
+#     numbers start at 1 per app and would collide with CFBundleVersions
+#     already uploaded from GitHub runs (1 and 10) — App Store Connect
+#     rejects duplicates. All targets still share exactly one number,
+#     which is the invariant patch-signing.rb and the verify step guard.
+workflows:
+  simulator-regression:
+    name: iOS — Simulator regression
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+    environment:
+      # The GitHub lane selects the newest Xcode on the image (its
+      # prebuilt-RN Swift packages declare swift-tools 6.2 and failed
+      # under Swift 6.1). If the prebuild step fails with "using Swift
+      # tools version 6.2.0 but the installed version is 6.1.x", change
+      # this pin to `latest` — see CODEMAGIC-SETUP.md.
+      xcode: 16.4
+      # Node 22 (not 20): scripts/sim/make-fixtures.ts runs with
+      # `node --experimental-strip-types`, which needs Node >= 22.6.
+      node: 22
+      vars:
+        EXPO_NO_TELEMETRY: "1"
+    scripts:
+      # --- GitHub job "Typecheck, lint, unit tests" (ran on Linux
+      # there; here it is the head of the same workflow — one machine,
+      # so the simulator job's `needs: unit` ordering is just sequence,
+      # and the second `npm ci` the GitHub file runs is not repeated).
+      - name: Install dependencies
+        script: |
+          set -euo pipefail
+          npm ci
+      - name: Typecheck
+        script: |
+          set -euo pipefail
+          npx tsc --noEmit
+      - name: Lint
+        script: |
+          set -euo pipefail
+          npx eslint .
+      - name: Unit tests
+        script: |
+          set -euo pipefail
+          npm test
+      # --- GitHub job "Build + run on iPhone simulator" ---
+      - name: Show Xcode version (pinned in environment above)
+        script: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+      - name: Prebuild iOS project
+        script: |
+          set -euo pipefail
+          npx expo prebuild --platform ios --clean
+      - name: Verify native wiring
+        script: |
+          set -euo pipefail
+          grep -q "EverytoolSharedVault" ios/Podfile.lock || { echo "::error::EverytoolSharedVault module is not linked"; exit 1; }
+          grep -q "OpenToolIntent.swift in Sources" ios/Everytool.xcodeproj/project.pbxproj || { echo "::error::OpenToolIntent is not in the app target"; exit 1; }
+          grep -q "EverytoolIntents.swift in Sources" ios/Everytool.xcodeproj/project.pbxproj || { echo "::error::EverytoolIntents is not in the app target"; exit 1; }
+      - name: Pick and boot an iPhone simulator
+        script: |
+          set -euo pipefail
+          UDID="$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          d = json.load(sys.stdin)["devices"]
+          c = [(rt, x) for rt, xs in d.items() if "iOS" in rt for x in xs if x["name"].startswith("iPhone")]
+          pro = [t for t in c if "Pro" in t[1]["name"] and "Max" not in t[1]["name"]] or c
+          pro.sort(key=lambda t: (t[0], t[1]["name"]))
+          print(pro[-1][1]["udid"])')"
+          echo "UDID=$UDID" >> "$CM_ENV"
+          # Software keyboard on, so the Everytool keyboard can show.
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl list devices | grep "$UDID"
+      - name: Build for simulator
+        script: |
+          set -o pipefail
+          mkdir -p build
+          xcodebuild \
+            -workspace ios/Everytool.xcworkspace \
+            -scheme Everytool \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination "id=$UDID" \
+            -derivedDataPath build/sim \
+            CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= \
+            PROVISIONING_PROFILE_SPECIFIER= \
+            build | tee build/xcodebuild.log | grep -E "error:|warning: .*Everytool|BUILD (SUCCEEDED|FAILED)" || true
+          grep -q "BUILD SUCCEEDED" build/xcodebuild.log
+      - name: Verify bundle (extensions + 13 controls)
+        script: |
+          set -euo pipefail
+          APP="build/sim/Build/Products/Release-iphonesimulator/Everytool.app"
+          echo "APP=$APP" >> "$CM_ENV"
+          ls "$APP/PlugIns"
+          for ext in EverytoolKeyboard EverytoolControls EverytoolShare EverytoolBroadcast EverytoolBroadcastUI; do
+            test -d "$APP/PlugIns/$ext.appex" || { echo "::error::$ext.appex missing"; exit 1; }
+          done
+          BIN="$APP/PlugIns/EverytoolControls.appex/EverytoolControls"
+          # The ten tool controls share one interpolated kind
+          # ("app.everytool.ios.controls.<tool>"); the record control's
+          # kind is a literal. Both must be in the binary.
+          strings "$BIN" | grep -q "app.everytool.ios.controls.record"
+          strings "$BIN" | grep -q "app.everytool.ios.controls.sessionstart"
+          strings "$BIN" | grep -q "app.everytool.ios.controls.sessionfinish"
+          strings "$BIN" | grep -q "app.everytool.ios.controls."
+          # Display names are NOT reliable binary strings: a title of 15
+          # bytes or fewer is a Swift small string, inlined into code and
+          # never stored contiguously ("Resize Photo", "PDF Tools", ...),
+          # while "Clipboard"/"Convert" only matched as substrings of the
+          # type names. Assert on what the binary provably carries: each
+          # control's type name (Swift type metadata) and its description
+          # text (long literals are stored as cstrings).
+          for pair in \
+            "RecordControl|Start a scrolling capture that Everytool stitches into one image." \
+            "StitchControl|Open Everytool's long screenshot stitcher." \
+            "ClipboardControl|Open your saved clipboard items." \
+            "ConvertControl|Open Everytool's file converter." \
+            "QrControl|Make or scan a QR code." \
+            "ResizeControl|Shrink a photo to a smaller size." \
+            "PdfControl|Merge, split or compress PDFs." \
+            "TextControl|Count, extract and clean up text." \
+            "DaysControl|Count days between dates." \
+            "SplitControl|Split a bill with tax and tip." \
+            "GifControl|Turn a short video into a GIF." \
+            "StartSessionControl|Start a session: take screenshots while you scroll, then tap Stitch Screenshots." \
+            "FinishSessionControl|Join the screenshots you took into one long screenshot."; do
+            type_name="${pair%%|*}"; summary="${pair#*|}"
+            strings "$BIN" | grep -q "$type_name" || { echo "::error::control type '$type_name' missing"; exit 1; }
+            strings "$BIN" | grep -q "$summary" || { echo "::error::control '$type_name' description missing"; exit 1; }
+          done
+          strings "$BIN" | grep -q "Record Long Screenshot"
+          echo "All Control Center controls present."
+          strings "$BIN" | grep -q "app.everytool.ios.widgets.countdown" || { echo "::error::Countdown widget missing"; exit 1; }
+          echo "Countdown widget present."
+      - name: Verify Siri & Shortcuts actions are registered
+        script: |
+          set -euo pipefail
+          META="$APP/Metadata.appintents"
+          test -d "$META" || { echo "::error::No App Intents metadata in the app bundle"; exit 1; }
+          for intent in OpenEverytoolToolIntent StartLongScreenshotIntent StitchScreenshotsIntent SaveClipIntent GetClipsIntent TextStatsIntent ExtractFromTextIntent DaysUntilIntent SplitBillIntent MakeQRCodeIntent ConvertImageIntent ResizeImageIntent RemoveLocationIntent MergePDFsIntent OpenToolIntent; do
+            grep -rqa "$intent" "$META" || { echo "::error::$intent not registered"; exit 1; }
+          done
+          echo "All 15 App Intents registered."
+      - name: Install app, grant photo access, add media
+        script: |
+          set -euo pipefail
+          xcrun simctl install "$UDID" "$APP"
+          # STRICT grants (12a diagnostics): a Photos grant that silently
+          # did not stick was one of two suspects for the session-start
+          # failure, and the old `|| true` hid which. Fail loudly on the
+          # grant itself, then read the grant back from the simulator's
+          # TCC database so the run log states the resulting auth_value.
+          xcrun simctl privacy "$UDID" grant photos app.everytool.ios
+          xcrun simctl privacy "$UDID" grant photos-add app.everytool.ios
+          TCC_DB="$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data/Library/TCC/TCC.db"
+          if [ -f "$TCC_DB" ]; then
+            AUTH="$(sqlite3 "$TCC_DB" "SELECT auth_value FROM access WHERE service='kTCCServicePhotos' AND client='app.everytool.ios' ORDER BY auth_value DESC LIMIT 1;")"
+            echo "TCC kTCCServicePhotos for app.everytool.ios: auth_value=${AUTH:-<no row>}"
+            { [ -n "$AUTH" ] && [ "$AUTH" != "0" ]; } || { echo "::error::Photos grant did not stick (TCC auth_value=${AUTH:-none})"; exit 1; }
+          else
+            echo "::warning::TCC database not found at $TCC_DB — grant readback skipped (the grant itself was strict)"
+          fi
+          node --experimental-strip-types scripts/sim/make-fixtures.ts sim-fixtures
+          xcrun simctl addmedia "$UDID" sim-fixtures/photo.png sim-fixtures/shots/*.png
+      - name: Install Maestro
+        script: |
+          set -euo pipefail
+          # Maestro needs a Java runtime; the GitHub macos-15 image ships
+          # one, and so do Codemagic's Mac images — assert it explicitly
+          # and install via Homebrew if an image ever drops it.
+          java -version || brew install openjdk@17
+          curl -fsSL "https://get.maestro.mobile.dev" | bash
+      - name: Run regression suite
+        script: |
+          set -uo pipefail
+          # $HOME/.maestro/bin was appended to $GITHUB_PATH on GitHub;
+          # Codemagic steps each start a fresh shell, so add it here.
+          export PATH="$HOME/.maestro/bin:$PATH"
+          # scripts/sim/run-e2e.sh defines which flows block the build
+          # (14 receipt-scan, 12b session-finish and 20 keyboard are
+          # non-blocking there) and writes summary.md + JUnit reports +
+          # Maestro debug output under $OUT.
+          FX=sim-fixtures OUT=build/e2e scripts/sim/run-e2e.sh
+    artifacts:
+      # Mirrors the GitHub "Upload results" step (which ran if: always();
+      # Codemagic collects artifacts when the build ends either way):
+      # the e2e reports/screenshots/debug output and the build log.
+      - build/e2e/**/*
+      - build/xcodebuild.log
+
+  testflight:
+    name: iOS — Build & TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 90
+    environment:
+      xcode: 16.4
+      node: 20
+      # All signing/upload values come from the account-side `signing`
+      # environment variable group — see CODEMAGIC-SETUP.md for the
+      # inventory and where each value lives today. Nothing secret is
+      # stored in this file.
+      groups:
+        - signing
+      vars:
+        EXPO_NO_TELEMETRY: "1"
+    scripts:
+      - name: Install dependencies
+        script: |
+          set -euo pipefail
+          npm ci
+      - name: Install signing certificate & provisioning profiles
+        script: |
+          set -euo pipefail
+          TMP_DIR="$CM_BUILD_DIR/build/tmp"
+          mkdir -p "$TMP_DIR"
+
+          # --- Temporary keychain with the distribution certificate ---
+          CERT_PATH="$TMP_DIR/cert.p12"
+          echo "$CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+
+          KEYCHAIN_PATH="$TMP_DIR/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$CERT_P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+          echo "Code signing identities in build keychain:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+          # --- Provisioning profiles, installed under their UUIDs ---
+          PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PROFILES_DIR"
+
+          install_profile() {
+            local var_name="$1"
+            local raw="$TMP_DIR/$var_name.mobileprovision"
+            echo "${!var_name}" | base64 --decode > "$raw"
+            local plist="$TMP_DIR/$var_name.plist"
+            security cms -D -i "$raw" > "$plist"
+            local uuid name
+            uuid="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$plist")"
+            name="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$plist")"
+            cp "$raw" "$PROFILES_DIR/$uuid.mobileprovision"
+            echo "Installed profile: $name ($uuid)"
+          }
+
+          install_profile PROFILE_APP_B64
+          install_profile PROFILE_KEYBOARD_B64
+          install_profile PROFILE_SHARE_B64
+          install_profile PROFILE_WIDGET_B64
+          install_profile PROFILE_BROADCAST_B64
+          install_profile PROFILE_BROADCASTUI_B64
+      - name: Show Xcode version (pinned in environment above)
+        script: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+      - name: Prebuild iOS project
+        script: |
+          set -euo pipefail
+          npx expo prebuild --platform ios --clean
+      - name: Patch signing settings (manual)
+        script: |
+          set -euo pipefail
+          # One shared CFBundleVersion for app + extensions, offset so
+          # Codemagic's per-app counter (which starts at 1) can never
+          # collide with a version App Store Connect already accepted
+          # from the GitHub lane. patch-signing.rb aborts loudly if
+          # BUILD_NUMBER is unset — keep that guard fed.
+          EFFECTIVE_BUILD_NUMBER=$((BUILD_NUMBER + 1000))
+          echo "EFFECTIVE_BUILD_NUMBER=$EFFECTIVE_BUILD_NUMBER" >> "$CM_ENV"
+          echo "Build number for this run: $EFFECTIVE_BUILD_NUMBER (Codemagic $BUILD_NUMBER + 1000)"
+          if ! ruby -e "require 'xcodeproj'" 2>/dev/null; then
+            echo "xcodeproj gem missing — installing"
+            sudo gem install xcodeproj --no-document
+          fi
+          BUILD_NUMBER="$EFFECTIVE_BUILD_NUMBER" ruby scripts/patch-signing.rb
+      - name: Archive
+        script: |
+          set -uo pipefail
+          TMP_DIR="$CM_BUILD_DIR/build/tmp"
+          mkdir -p "$TMP_DIR"
+          if ! xcodebuild archive \
+            -workspace ios/Everytool.xcworkspace \
+            -scheme Everytool \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$TMP_DIR/Everytool.xcarchive" \
+            CURRENT_PROJECT_VERSION=$EFFECTIVE_BUILD_NUMBER \
+            > "$TMP_DIR/archive.log" 2>&1; then
+            echo "::error::xcodebuild archive FAILED — diagnostics from archive.log:"
+            mkdir -p build/logs && cp "$TMP_DIR/archive.log" build/logs/ || true
+            echo "----- all error: lines -----"
+            grep -n -E "error:|fatal error" "$TMP_DIR/archive.log" | head -100 || true
+            FIRST="$(grep -n -m1 -E "error:" "$TMP_DIR/archive.log" | cut -d: -f1 || true)"
+            if [ -n "${FIRST:-}" ]; then
+              START=$(( FIRST > 30 ? FIRST - 30 : 1 ))
+              echo "----- context around first error (lines $START..$((FIRST + 80))) -----"
+              sed -n "${START},$((FIRST + 80))p" "$TMP_DIR/archive.log"
+            fi
+            echo "----- failed build commands summary -----"
+            grep -n -A8 "The following build commands failed" "$TMP_DIR/archive.log" || true
+            echo "----- last 40 lines -----"
+            tail -40 "$TMP_DIR/archive.log"
+            exit 1
+          fi
+          echo "Archive succeeded:"
+          grep -E "ARCHIVE SUCCEEDED" "$TMP_DIR/archive.log" || true
+          ls -la "$TMP_DIR/Everytool.xcarchive"
+      - name: Export .ipa
+        script: |
+          set -uo pipefail
+          TMP_DIR="$CM_BUILD_DIR/build/tmp"
+          mkdir -p build/export
+          if ! xcodebuild -exportArchive \
+            -archivePath "$TMP_DIR/Everytool.xcarchive" \
+            -exportPath build/export \
+            -exportOptionsPlist scripts/ExportOptions.plist \
+            > "$TMP_DIR/export.log" 2>&1; then
+            echo "::error::xcodebuild -exportArchive FAILED — export.log:"
+            mkdir -p build/logs && cp "$TMP_DIR/export.log" build/logs/ || true
+            grep -n -E "error:" "$TMP_DIR/export.log" | head -50 || true
+            tail -150 "$TMP_DIR/export.log"
+            exit 1
+          fi
+          echo "Export succeeded:"
+          grep -E "EXPORT SUCCEEDED" "$TMP_DIR/export.log" || true
+          ls -lh build/export
+          IPA_PATH="$(ls build/export/*.ipa | head -1)"
+          echo "IPA_PATH=$IPA_PATH" >> "$CM_ENV"
+          echo "Exported IPA: $IPA_PATH"
+      - name: Verify .ipa build number
+        script: |
+          set -euo pipefail
+          TMP_DIR="$CM_BUILD_DIR/build/tmp"
+          mkdir -p "$TMP_DIR"
+          # Guard: app + every extension must carry THIS run's number.
+          # A GitHub run shipped app=1 / extensions=9 and App Store
+          # Connect rejected the upload as a duplicate version — under a
+          # green checkmark. Fail here instead, before any upload.
+          unzip -p "$IPA_PATH" 'Payload/*.app/Info.plist' > "$TMP_DIR/app-Info.plist"
+          APP_VER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$TMP_DIR/app-Info.plist")"
+          echo "App CFBundleVersion in .ipa: $APP_VER (expected $EFFECTIVE_BUILD_NUMBER)"
+          if [ "$APP_VER" != "$EFFECTIVE_BUILD_NUMBER" ]; then
+            echo "::error::App CFBundleVersion $APP_VER != build number $EFFECTIVE_BUILD_NUMBER — App Store Connect would reject this as a duplicate version."
+            exit 1
+          fi
+          for appex in $(unzip -Z1 "$IPA_PATH" | grep -E 'Payload/[^/]+\.app/PlugIns/[^/]+\.appex/Info\.plist$' || true); do
+            unzip -p "$IPA_PATH" "$appex" > "$TMP_DIR/appex-Info.plist"
+            V="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$TMP_DIR/appex-Info.plist")"
+            echo "$appex CFBundleVersion: $V"
+            if [ "$V" != "$EFFECTIVE_BUILD_NUMBER" ]; then
+              echo "::error::Extension $appex CFBundleVersion $V != build number $EFFECTIVE_BUILD_NUMBER (ITMS-90473)"
+              exit 1
+            fi
+          done
+      - name: Upload to App Store Connect (TestFlight)
+        script: |
+          set -euo pipefail
+          # The GitHub lane gates this step on the ASC_ISSUER_ID secret
+          # being set (and prints a skip notice otherwise). Codemagic
+          # steps have no `if:`, so the same gate lives here: with no
+          # issuer id the build still succeeds and the .ipa is in the
+          # artifacts — only the upload is skipped.
+          if [ -z "${ASC_ISSUER_ID:-}" ]; then
+            echo "::notice::ASC_ISSUER_ID is not set in the signing group — skipping the App Store Connect upload. The .ipa was built and is available in this build's artifacts."
+            exit 0
+          fi
+          TMP_DIR="$CM_BUILD_DIR/build/tmp"
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          echo "$ASC_API_KEY_B64" | base64 --decode > "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$IPA_PATH" \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID" 2>&1 | tee "$TMP_DIR/altool.log"
+          # altool can exit 0 even when App Store Connect rejects the
+          # upload (HTTP 409 duplicate CFBundleVersion under a green
+          # step). Its output text is the only verdict.
+          if ! grep -q "UPLOAD SUCCEEDED" "$TMP_DIR/altool.log"; then
+            echo "::error::altool did not report UPLOAD SUCCEEDED — treating this upload as FAILED (see its output above)."
+            exit 1
+          fi
+    artifacts:
+      # Mirrors the GitHub "Upload .ipa artifact" step (success path)
+      # and "Upload build logs (on failure)"; Codemagic collects these
+      # when the build ends, success or failure. The GitHub lane's
+      # "Delete signing keychain (always)" step has no equivalent here:
+      # Codemagic build VMs are ephemeral and destroyed after the build,
+      # keychain included.
+      - build/export/*.ipa
+      - build/logs/**/*
