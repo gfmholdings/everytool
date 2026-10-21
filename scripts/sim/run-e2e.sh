@@ -46,9 +46,12 @@ run_flow "Home: all ten tools" 01_home.yaml
 run_flow "Control Center routes: every tool id opens its tool" 02_controls_routes.yaml
 run_flow "Clipboard: save/edit/pin/copy/paste/cut/delete" 03_clipboard.yaml
 
-# The clip must be in the App Group document — that is what the keyboard reads.
+# The clip must be in the App Group document — that is what the keyboard
+# reads. Both halves of the edit must be there: the new text AND the
+# snippet word (the vault write race lost the snippet while the text
+# landed — a text-only grep passed over the loss for three runs).
 check "Clipboard: clips reach the shared App Group vault (keyboard source)" \
-  bash -c "\"$INJECT\" state | tee \"$OUT/shared-state.json\" | grep -q 'Maestro clip edited'"
+  bash -c "\"$INJECT\" state | tee \"$OUT/shared-state.json\" | grep -q 'Maestro clip edited' && grep -qE '\"shortcut\": *\"mcl\"' \"$OUT/shared-state.json\""
 
 run_flow "Text tools" 04_text.yaml
 run_flow "Days counter + Split bill" 05_days_split.yaml

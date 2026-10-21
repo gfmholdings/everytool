@@ -67,6 +67,10 @@ enum SharedVault {
       let json = String(data: data, encoding: .utf8)
     else { return false }
     defaults.set(json, forKey: stateKey)
+    // Same flush rule as the app-side module: readers use a fresh
+    // suite instance per call, so an unflushed write can be missed
+    // by the next read-modify-write and get overwritten.
+    defaults.synchronize()
     return true
   }
 

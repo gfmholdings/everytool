@@ -28,6 +28,14 @@ public class EverytoolSharedVaultModule: Module {
     Function("writeStateJson") { (groupId: String, json: String) -> Bool in
       guard let defaults = UserDefaults(suiteName: groupId) else { return false }
       defaults.set(json, forKey: "everytool.state.v1")
+      // Flush before returning: AppStore mutations are read-modify-write
+      // through a FRESH suite instance per call, and two commits can land
+      // back to back in one tap (clip Save writes the snippet word, then
+      // the text). Without the flush the second commit's read can see
+      // the pre-write document and silently overwrite the first commit —
+      // that is exactly how a saved snippet word was lost (Codemagic
+      // runs 6ad8302e/6ad83868/6ad83eb4, flow 03).
+      defaults.synchronize()
       return true
     }
 
@@ -42,7 +50,10 @@ public class EverytoolSharedVaultModule: Module {
     Function("takePendingTool") { (groupId: String) -> String? in
       guard let defaults = UserDefaults(suiteName: groupId) else { return nil }
       let tool = defaults.string(forKey: "everytool.pendingTool")
-      if tool != nil { defaults.removeObject(forKey: "everytool.pendingTool") }
+      if tool != nil {
+        defaults.removeObject(forKey: "everytool.pendingTool")
+        defaults.synchronize()
+      }
       return tool
     }
 
@@ -55,6 +66,7 @@ public class EverytoolSharedVaultModule: Module {
     Function("writeGroupString") { (groupId: String, key: String, value: String?) -> Bool in
       guard let defaults = UserDefaults(suiteName: groupId) else { return false }
       if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+      defaults.synchronize()
       return true
     }
 
