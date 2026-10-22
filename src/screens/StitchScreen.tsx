@@ -38,7 +38,7 @@ import {
   type StitchPhase,
   type StitchResult,
 } from '../lib/stitch';
-import type { Segment } from '../lib/stitchCore';
+import type { ColumnRepair, OverlayStamp, Segment } from '../lib/stitchCore';
 import {
   requestNotificationPermission,
   sharedVaultAvailable,
@@ -442,10 +442,11 @@ export function StitchScreen({
               taken since Start into one long image.
             </Text>
             <Text style={[type.small, styles.spaced]}>
-              Tip: Settings → Accessibility → Touch → Back Tap → Double Tap →
-              Screenshot lets you capture with a tap on the back of the
-              phone. You can also add “Start Long Screenshot” and “Stitch
-              Screenshots” to Control Center.
+              Tip: Settings → Accessibility → Touch → Back Tap → Double Tap,
+              then choose Screenshot. iOS saves each screenshot to Photos
+              automatically. Come back and tap Stitch. You can also add
+              “Start Long Screenshot” and “Stitch Screenshots” to Control
+              Center.
             </Text>
           </Card>
           {sessionAt ? (
@@ -642,18 +643,30 @@ export function StitchScreen({
 }
 
 /** Shows the stitch by drawing each source frame's used rows — exactly
- *  what was written, without decoding one giant bitmap. */
+ *  what was written, without decoding one giant bitmap. Repairs and the
+ *  one floating-overlay stamp are drawn on top of those rows. */
 function SegmentView({
   frame,
   seg,
   scale,
+  outY,
+  frames,
+  repairs,
+  stamps,
 }: {
   frame: { uri: string; width: number; height: number };
   seg: Segment;
   scale: number;
+  outY: number;
+  frames: { uri: string; width: number; height: number }[];
+  repairs: ColumnRepair[];
+  stamps: OverlayStamp[];
 }) {
+  const segH = seg.to - seg.from;
+  const localRepairs = repairs.filter((r) => r.outY1 > outY && r.outY0 < outY + segH);
+  const localStamps = stamps.filter((s) => s.outY + s.height > outY && s.outY < outY + segH);
   return (
-    <View style={{ height: (seg.to - seg.from) * scale, overflow: 'hidden' }}>
+    <View style={{ height: segH * scale, overflow: 'hidden' }}>
       <Image
         source={{ uri: frame.uri }}
         style={{
@@ -662,6 +675,68 @@ function SegmentView({
           marginTop: -seg.from * scale,
         }}
       />
+      {localRepairs.map((r, i) => {
+        const donor = frames[r.frame];
+        if (!donor || scale === 0) return null;
+        const visTop = Math.max(r.outY0, outY);
+        const visBot = Math.min(r.outY1, outY + segH);
+        const srcTop = r.srcY0 + (visTop - r.outY0);
+        return (
+          <View
+            key={`r${i}`}
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              left: r.x0 * scale,
+              top: (visTop - outY) * scale,
+              width: (r.x1 - r.x0) * scale,
+              height: (visBot - visTop) * scale,
+              overflow: 'hidden',
+            }}
+          >
+            <Image
+              source={{ uri: donor.uri }}
+              style={{
+                width: donor.width * scale,
+                height: donor.height * scale,
+                marginTop: -srcTop * scale,
+                marginLeft: -r.x0 * scale,
+              }}
+            />
+          </View>
+        );
+      })}
+      {localStamps.map((s, i) => {
+        const src = frames[s.frame];
+        if (!src || scale === 0) return null;
+        const visTop = Math.max(s.outY, outY);
+        const visBot = Math.min(s.outY + s.height, outY + segH);
+        const srcTop = s.srcY + (visTop - s.outY);
+        return (
+          <View
+            key={`s${i}`}
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              left: s.outX * scale,
+              top: (visTop - outY) * scale,
+              width: s.width * scale,
+              height: (visBot - visTop) * scale,
+              overflow: 'hidden',
+            }}
+          >
+            <Image
+              source={{ uri: src.uri }}
+              style={{
+                width: src.width * scale,
+                height: src.height * scale,
+                marginTop: -srcTop * scale,
+                marginLeft: -s.srcX * scale,
+              }}
+            />
+          </View>
+        );
+      })}
     </View>
   );
 }
@@ -670,12 +745,13 @@ function SegmentsPreview({ result, maxHeight }: { result: StitchResult; maxHeigh
   const [width, setWidth] = useState(0);
   const scale = width > 0 ? width / result.width : 0;
   const shown = useMemo(() => {
-    const out: Segment[] = [];
+    const out: { seg: Segment; outY: number }[] = [];
     let h = 0;
+    let outY = 0;
     for (const seg of result.segments) {
-      if (h >= maxHeight || scale === 0) break;
-      out.push(seg);
+      if (h < maxHeight && scale !== 0) out.push({ seg, outY });
       h += (seg.to - seg.from) * scale;
+      outY += seg.to - seg.from;
     }
     return out;
   }, [result, scale, maxHeight]);
@@ -684,8 +760,17 @@ function SegmentsPreview({ result, maxHeight }: { result: StitchResult; maxHeigh
       style={[styles.preview, { maxHeight }]}
       onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
     >
-      {shown.map((seg, i) => (
-        <SegmentView key={i} frame={result.frames[seg.frame]!} seg={seg} scale={scale} />
+      {shown.map(({ seg, outY }, i) => (
+        <SegmentView
+          key={i}
+          frame={result.frames[seg.frame]!}
+          seg={seg}
+          scale={scale}
+          outY={outY}
+          frames={result.frames}
+          repairs={result.repairs}
+          stamps={result.stamps}
+        />
       ))}
       {result.redactions.map((r, i) => (
         <HiddenBox key={i} r={r} scale={scale} offset={0} />
@@ -743,6 +828,15 @@ function FullLengthViewer({
     }
     return out;
   }, [result, scale]);
+  const outYs = useMemo(() => {
+    const ys: number[] = [];
+    let y = 0;
+    for (const s of result.segments) {
+      ys.push(y);
+      y += s.to - s.from;
+    }
+    return ys;
+  }, [result.segments]);
 
   const scaleRef = useRef(scale);
   useEffect(() => {
@@ -801,8 +895,16 @@ function FullLengthViewer({
                 setScrollShown(scrollY.current);
               }}
               scrollEventThrottle={32}
-              renderItem={({ item }) => (
-                <SegmentView frame={result.frames[item.frame]!} seg={item} scale={scale} />
+              renderItem={({ item, index }) => (
+                <SegmentView
+                  frame={result.frames[item.frame]!}
+                  seg={item}
+                  scale={scale}
+                  outY={outYs[index] ?? 0}
+                  frames={result.frames}
+                  repairs={result.repairs}
+                  stamps={result.stamps}
+                />
               )}
               getItemLayout={(_, index) => {
                 const s = result.segments[index]!;

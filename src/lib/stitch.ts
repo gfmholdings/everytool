@@ -4,12 +4,16 @@ import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { decodePngRows, decodePngRowsAsync, PngStreamWriter, readPngSize } from './deflate';
 import {
   analyzeFrames,
+  EDGE_COLS,
+  edgeXsForCrop,
   emitSegments,
   FEATURE_COLS,
   FeatureBuilder,
   PixelateSink,
   pixelBlock,
+  type ColumnRepair,
   type FrameFeatures,
+  type OverlayStamp,
   type Redaction,
   type Segment,
 } from './stitchCore';
@@ -46,6 +50,10 @@ export interface StitchResult {
   segments: Segment[];
   /** Areas hidden (pixelated) in the written image. */
   redactions: Redaction[];
+  /** Column fills that keep a floating overlay from eating scrolled content. */
+  repairs: ColumnRepair[];
+  /** The single copy of each screen-fixed floating overlay. */
+  stamps: OverlayStamp[];
 }
 
 export type StitchPhase = 'preparing' | 'reading' | 'matching' | 'writing';
@@ -113,21 +121,40 @@ async function normalize(
 async function frameFeatures(frame: StitchFrame): Promise<FrameFeatures> {
   const originX = Math.floor(frame.width * 0.03);
   const cropWidth = Math.max(FEATURE_COLS, Math.floor(frame.width * 0.89));
-  const narrow = await manipulateAsync(
-    frame.uri,
-    [
-      { crop: { originX, originY: 0, width: cropWidth, height: frame.height } },
-      { resize: { width: FEATURE_COLS, height: frame.height } },
-    ],
-    { format: SaveFormat.PNG },
-  );
-  const bytes = await new File(narrow.uri).bytes();
+  // The right 8% is left out of scroll matching (the scroll indicator
+  // lives there) but a floating button sits in that same corner. A second
+  // strip keeps enough columns to see it. Both stay on-device.
+  const edgeOrigin = Math.floor(frame.width * 0.72);
+  const edgeWidth = Math.max(EDGE_COLS, frame.width - edgeOrigin);
+  const [narrow, edge] = await Promise.all([
+    manipulateAsync(
+      frame.uri,
+      [
+        { crop: { originX, originY: 0, width: cropWidth, height: frame.height } },
+        { resize: { width: FEATURE_COLS, height: frame.height } },
+      ],
+      { format: SaveFormat.PNG },
+    ),
+    manipulateAsync(
+      frame.uri,
+      [
+        { crop: { originX: edgeOrigin, originY: 0, width: edgeWidth, height: frame.height } },
+        { resize: { width: EDGE_COLS, height: frame.height } },
+      ],
+      { format: SaveFormat.PNG },
+    ),
+  ]);
   const builder = new FeatureBuilder(frame.width, frame.height, true);
+  builder.setEdgeXs(edgeXsForCrop(frame.width, edgeOrigin, edgeWidth));
+  const [bytes, edgeBytes] = await Promise.all([new File(narrow.uri).bytes(), new File(edge.uri).bytes()]);
   decodePngRows(bytes, (y, rgba) => builder.addRow(y, rgba));
-  try {
-    new File(narrow.uri).delete();
-  } catch {
-    // cache cleanup is best effort
+  decodePngRows(edgeBytes, (y, rgba) => builder.addEdgeRow(y, rgba));
+  for (const uri of [narrow.uri, edge.uri]) {
+    try {
+      new File(uri).delete();
+    } catch {
+      // cache cleanup is best effort
+    }
   }
   return builder.result();
 }
@@ -231,6 +258,8 @@ export async function stitchFrames(
     frames,
     segments: analysis.segments,
     redactions: [],
+    repairs: analysis.repairs,
+    stamps: analysis.stamps,
   };
 }
 

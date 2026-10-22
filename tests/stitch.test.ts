@@ -78,7 +78,12 @@ const PAGE = makePage();
 const CONTENT_TOP = STATUS + NAV;
 const CONTENT_H = H - CONTENT_TOP - TAB;
 
-function screen(scroll: number, clock: number, overlay = false): Uint8Array {
+const FLOAT_SIZE = 36;
+const FLOAT_X = W - 10 - FLOAT_SIZE;
+const FLOAT_Y = H - TAB - 14 - FLOAT_SIZE;
+const FLOAT = { r: 255, g: 0, b: 200 };
+
+function screen(scroll: number, clock: number, overlay = false, floating = false): Uint8Array {
   const img = new Uint8Array(W * H * 4);
   for (let y = 0; y < H; y += 1) {
     for (let x = 0; x < W; x += 1) {
@@ -118,6 +123,21 @@ function screen(scroll: number, clock: number, overlay = false): Uint8Array {
           r = 80;
           g = 80;
           b = 80;
+        }
+        // A compose button: fixed in screen space, only on the right,
+        // so the rest of its rows keep scrolling. Sits in the band the
+        // scroll matcher ignores (past 92% of the width) as well as just
+        // inside it — the real Mail button does the same.
+        if (
+          floating &&
+          x >= FLOAT_X &&
+          x < FLOAT_X + FLOAT_SIZE &&
+          y >= FLOAT_Y &&
+          y < FLOAT_Y + FLOAT_SIZE
+        ) {
+          r = FLOAT.r;
+          g = FLOAT.g;
+          b = FLOAT.b;
         }
       }
       if (overlay) {
@@ -194,6 +214,72 @@ test('stitch: steady scroll reproduces the page exactly, chrome once', async () 
   // The tab bar appears once, at the very bottom.
   const tabRow = (analysis.height - TAB + 2) * W * 4;
   assert.equal(out[tabRow], 235);
+});
+
+function isFloatPixel(out: Uint8Array, y: number, x: number): boolean {
+  const o = (y * W + x) * 4;
+  return out[o] === FLOAT.r && out[o + 1] === FLOAT.g && out[o + 2] === FLOAT.b;
+}
+
+test('stitch: a fixed floating button is kept once and content stays continuous', async () => {
+  // Small steps (25px) are shorter than the button, which is how copies
+  // stack on top of each other; larger steps still include the whole button.
+  const scrolls = [0, 160, 185, 420, 445, 700];
+  const imgs = scrolls.map((s, i) => screen(s, i, false, true));
+  const analysis = analyzeFrames(imgs.map((m) => features(m)), { mode: 'record' });
+  assert.equal(analysis.stackedSeams, 0, 'every seam matched');
+  assert.equal(analysis.duplicates, 0);
+  assert.ok(analysis.header >= CONTENT_TOP - 2, `header ${analysis.header}`);
+  assert.ok(analysis.footer >= TAB - 2, `footer ${analysis.footer}`);
+  assert.ok(analysis.stamps.length >= 1, 'the button is stamped once from the last frame');
+  assert.ok(analysis.repairs.length > 0, 'covered content is filled from another frame');
+  const out = await compose(imgs, analysis);
+  const last = scrolls[scrolls.length - 1]!;
+  let bad = 0;
+  for (let py = 0; py < last + CONTENT_H; py += 1) {
+    const outY = CONTENT_TOP + py;
+    for (let x = 0; x < W - 80; x += 1) {
+      const o = (outY * W + x) * 4;
+      const p = (py * W + x) * 4;
+      if (out[o] !== PAGE[p] || out[o + 1] !== PAGE[p + 1] || out[o + 2] !== PAGE[p + 2]) {
+        bad += 1;
+        break;
+      }
+    }
+  }
+  assert.equal(bad, 0, `${bad} content rows broke beside the button`);
+
+  // One solid square: a run of rows that contain the button colour, and
+  // no second run further up the page.
+  const rowsWithButton: number[] = [];
+  for (let y = 0; y < analysis.height; y += 1) {
+    let hit = false;
+    for (let x = 0; x < W; x += 1) {
+      if (isFloatPixel(out, y, x)) {
+        hit = true;
+        break;
+      }
+    }
+    if (hit) rowsWithButton.push(y);
+  }
+  assert.ok(rowsWithButton.length > 0, 'the floating square is missing');
+  const runs: number[][] = [[rowsWithButton[0]!]];
+  for (let i = 1; i < rowsWithButton.length; i += 1) {
+    const y = rowsWithButton[i]!;
+    const cur = runs[runs.length - 1]!;
+    if (y === cur[cur.length - 1]! + 1) cur.push(y);
+    else runs.push([y]);
+  }
+  assert.equal(runs.length, 1, `floating square repeated in ${runs.length} places: ${runs.map((r) => r[0]).join(',')}`);
+  const run = runs[0]!;
+  assert.ok(run.length >= FLOAT_SIZE - 4 && run.length <= FLOAT_SIZE + 20, `square height ${run.length}`);
+  assert.ok(run[0]! > analysis.height - H, `square at y ${run[0]} is not on the last screen`);
+  // The square itself is the magenta block, once, not a smear of it.
+  let magenta = 0;
+  for (const y of run) {
+    for (let x = 0; x < W; x += 1) if (isFloatPixel(out, y, x)) magenta += 1;
+  }
+  assert.ok(magenta >= (FLOAT_SIZE - 4) * (FLOAT_SIZE - 4), `only ${magenta} button pixels`);
 });
 
 test('stitch: no height cap — a 40-screen recording stitches in full', async () => {

@@ -11,19 +11,41 @@
       <key>NSExtensionAttributes</key>
       <dict>
         <!-- Images, PDFs and text only — the three kinds Everytool can
-             actually route somewhere useful. -->
+             actually route somewhere useful.
+             A dictionary rule (NSExtensionActivationSupportsImageWithMaxCount)
+             does not offer the extension for public.png: the share sheet
+             treats that key as photos (JPEG/HEIC) and a PNG never appears
+             as allowed. The predicate names public.png, public.jpeg and
+             public.heic explicitly, and still accepts anything that
+             conforms to public.image, plus PDF, text and URLs. -->
         <key>NSExtensionActivationRule</key>
-        <dict>
-          <key>NSExtensionActivationSupportsImageWithMaxCount</key>
-          <integer>20</integer>
-          <key>NSExtensionActivationSupportsText</key>
-          <true/>
-          <!-- Safari and most apps share a page as a URL, not text. -->
-          <key>NSExtensionActivationSupportsWebURLWithMaxCount</key>
-          <integer>1</integer>
-          <key>NSExtensionActivationSupportsFileWithMaxCount</key>
-          <integer>10</integer>
-        </dict>
+        <string>SUBQUERY (
+            extensionItems,
+            $extensionItem,
+            $extensionItem.attachments.@count &lt;= 20
+            AND
+            SUBQUERY (
+                $extensionItem.attachments,
+                $attachment,
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.png"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.jpeg"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.heic"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.heif"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.image"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.adobe.pdf"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.text"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.plain-text"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.url"
+            ).@count &gt;= 1
+        ).@count &gt;= 1</string>
       </dict>
     </dict>
   </dict>

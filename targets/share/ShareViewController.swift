@@ -2,6 +2,65 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+/// Copy a provider file URL into our temp directory before the provider
+/// deletes it. Remote URLs are refused — sharing stays on-device.
+/// A missing extension is sniffed so a PNG is not stored as ".img".
+private func copyFileURL(_ url: URL) -> URL? {
+    guard url.isFileURL else { return nil }
+    var ext = url.pathExtension.lowercased()
+    if ext.isEmpty, let handle = try? FileHandle(forReadingFrom: url) {
+        let head = (try? handle.read(upToCount: 12)) ?? Data()
+        try? handle.close()
+        ext = imageExtension(for: head)
+    }
+    if ext.isEmpty { ext = "img" }
+    let dest = FileManager.default.temporaryDirectory
+        .appendingPathComponent("shared-\(UUID().uuidString).\(ext)")
+    do {
+        try FileManager.default.copyItem(at: url, to: dest)
+        return dest
+    } catch {
+        return nil
+    }
+}
+
+private func writeImageTemp(_ data: Data, ext: String) -> URL? {
+    let dest = FileManager.default.temporaryDirectory
+        .appendingPathComponent("shared-\(UUID().uuidString).\(ext)")
+    do {
+        try data.write(to: dest, options: .atomic)
+        return dest
+    } catch {
+        return nil
+    }
+}
+
+/// PNG / JPEG / HEIC (and GIF) from the file header. Anything else is
+/// written as PNG bytes only when the caller already encoded PNG.
+private func imageExtension(for data: Data) -> String {
+    let b = [UInt8](data.prefix(12))
+    if b.count >= 8,
+       b[0] == 0x89, b[1] == 0x50, b[2] == 0x4E, b[3] == 0x47 {
+        return "png"
+    }
+    if b.count >= 3, b[0] == 0xFF, b[1] == 0xD8, b[2] == 0xFF {
+        return "jpg"
+    }
+    if b.count >= 6 {
+        let gif = String(bytes: b.prefix(6), encoding: .ascii) ?? ""
+        if gif.hasPrefix("GIF87") || gif.hasPrefix("GIF89") { return "gif" }
+    }
+    if b.count >= 12,
+       b[4] == 0x66, b[5] == 0x74, b[6] == 0x79, b[7] == 0x70 {
+        let brand = String(bytes: b[8..<12], encoding: .ascii) ?? ""
+        if brand == "heic" || brand == "heix" || brand == "heif"
+            || brand == "mif1" || brand == "msf1" || brand == "heim" {
+            return "heic"
+        }
+    }
+    return "img"
+}
+
 /// One item handed to the share sheet, already copied to a temp file
 /// the extension owns (providers hand out expiring URLs).
 struct SharedItem: Identifiable {
@@ -26,8 +85,10 @@ final class ShareModel: ObservableObject {
         Task {
             var loaded: [SharedItem] = []
             for provider in providers {
-                if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier),
-                   let url = await loadFile(provider, type: UTType.image.identifier) {
+                // Concrete types first. A PNG often conforms to public.image
+                // but loadFileRepresentation("public.image") comes back empty,
+                // while "public.png" (or loadItem → UIImage/Data) succeeds.
+                if let url = await loadBestImage(provider) {
                     loaded.append(SharedItem(url: url, kind: "image"))
                 } else if provider.hasItemConformingToTypeIdentifier(UTType.pdf.identifier),
                           let url = await loadFile(provider, type: UTType.pdf.identifier) {
@@ -53,19 +114,57 @@ final class ShareModel: ObservableObject {
         }
     }
 
+    /// Most specific first. public.image is the fallback for anything
+    /// else that conforms (GIF, TIFF, a screenshot UTI we didn't name).
+    private static let imageTypeOrder = [
+        UTType.png.identifier,
+        UTType.jpeg.identifier,
+        UTType.heic.identifier,
+        "public.heif",
+        UTType.gif.identifier,
+        UTType.image.identifier,
+    ]
+
+    private func loadBestImage(_ provider: NSItemProvider) async -> URL? {
+        let types = Self.imageTypeOrder.filter {
+            provider.hasItemConformingToTypeIdentifier($0)
+        }
+        if types.isEmpty { return nil }
+        for type in types {
+            if let url = await loadFile(provider, type: type) { return url }
+            if let url = await loadImageItem(provider, type: type) { return url }
+        }
+        return nil
+    }
+
     private func loadFile(_ provider: NSItemProvider, type: String) async -> URL? {
         await withCheckedContinuation { continuation in
             provider.loadFileRepresentation(forTypeIdentifier: type) { url, _ in
-                guard let url else {
-                    continuation.resume(returning: nil)
+                // The provider's URL is deleted when this completion
+                // returns; copy it out before resuming.
+                continuation.resume(returning: url.flatMap(copyFileURL))
+            }
+        }
+    }
+
+    /// Photos and Files sometimes hand a PNG over as UIImage or Data
+    /// instead of a file URL. Write those to a temp file the inbox can copy.
+    private func loadImageItem(_ provider: NSItemProvider, type: String) async -> URL? {
+        await withCheckedContinuation { continuation in
+            provider.loadItem(forTypeIdentifier: type, options: nil) { item, _ in
+                if let image = item as? UIImage, let data = image.pngData() {
+                    continuation.resume(returning: writeImageTemp(data, ext: "png"))
                     return
                 }
-                // The provider's URL is deleted when the completion runs;
-                // copy it out first.
-                let tmp = FileManager.default.temporaryDirectory
-                    .appendingPathComponent(UUID().uuidString + "-" + url.lastPathComponent)
-                try? FileManager.default.copyItem(at: url, to: tmp)
-                continuation.resume(returning: tmp)
+                if let url = item as? URL {
+                    continuation.resume(returning: copyFileURL(url))
+                    return
+                }
+                if let data = item as? Data {
+                    continuation.resume(returning: writeImageTemp(data, ext: imageExtension(for: data)))
+                    return
+                }
+                continuation.resume(returning: nil)
             }
         }
     }
