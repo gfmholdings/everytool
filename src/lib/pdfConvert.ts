@@ -1,5 +1,5 @@
 // Any file → one PDF. Pure pdf-lib and plain rules, so they run in Node.
-// Nothing here is wired to the PDF screen, and nothing talks to the network.
+// The PDF screen calls convertFilesToPdf. Nothing here talks to the network.
 //
 // JPEG, PNG, plain text, Markdown, CSV, and the words of an RTF file are
 // written here. HEIC and the other image formats are decoded by ImageIO

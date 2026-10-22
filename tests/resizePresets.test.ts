@@ -8,7 +8,9 @@ import {
   clampCrop,
   cropForFrame,
   faceGuideLayout,
+  fillCropRect,
   findPreset,
+  fitExportSize,
   frameOf,
   lengthToPx,
   lockedSide,
@@ -271,4 +273,15 @@ test('resize presets: changing preset changes the frame, and the crop covers or 
   assert.equal(clamped.offsetX, 0);
   const slack = (source.height * fill.scale - cover.height) / 2;
   assert.equal(Math.abs(clamped.offsetY + slack) < 1e-9, true);
+
+  const rect = fillCropRect(source, cover, fill);
+  assert.ok(rect);
+  assert.equal(rect.originX, 0);
+  assert.equal(rect.width, 4000);
+  assert.equal(rect.originY + rect.height <= source.height, true);
+  const fitted = fitExportSize(source, cover);
+  assert.ok(fitted);
+  assert.equal(fitted.height, cover.height);
+  assert.equal(fitted.width <= cover.width, true);
+  assert.equal(fillCropRect(source, cover, { ...fill, rotation: 90 }), null);
 });

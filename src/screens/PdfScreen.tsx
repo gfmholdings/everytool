@@ -21,6 +21,7 @@ import { scanDocumentPages } from '../store/sharedVault';
 import { specToIndices } from '../lib/pages';
 import type { Palette } from '../theme';
 import { useThemed } from '../useTheme';
+import { PdfMore } from './PdfMore';
 
 type Mode = 'merge' | 'split' | 'compress';
 
@@ -31,10 +32,12 @@ type Mode = 'merge' | 'split' | 'compress';
 export function PdfScreen({
   onBack,
   initialPdf,
+  convertFiles,
   notify,
 }: {
   onBack: () => void;
   initialPdf?: { uri: string; name: string };
+  convertFiles?: { uri: string; name: string }[];
   notify: (msg: string, action?: { label: string; onPress: () => void }) => void;
 }) {
   const { type, styles } = useThemed(makeStyles);
@@ -307,6 +310,18 @@ export function PdfScreen({
           />
         </Card>
       )}
+      <PdfMore
+        key={(() => {
+          const first = sources.find((item) => item.kind === 'pdf');
+          return first ? `${first.uri}:${first.pages}` : 'no-pdf';
+        })()}
+        pdf={(() => {
+          const first = sources.find((item) => item.kind === 'pdf');
+          return first ? { uri: first.uri, name: first.name, pages: first.pages } : null;
+        })()}
+        convertFiles={convertFiles}
+        notify={notify}
+      />
     </ToolShell>
   );
 }

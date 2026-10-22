@@ -24,6 +24,7 @@ import {
 import { reencodeImage } from '../store/sharedVault';
 import type { Palette } from '../theme';
 import { useThemed } from '../useTheme';
+import { ResizeFrames } from './ResizeFrames';
 
 const WIDTHS = [640, 828, 1080, 1170, 1280, 1600] as const;
 
@@ -534,6 +535,7 @@ export function ResizeScreen({
           />
         </Card>
       )}
+      {source && <ResizeFrames source={source} notify={notify} />}
     </ToolShell>
   );
 }

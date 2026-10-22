@@ -1,7 +1,7 @@
 // Offline Splitwise-style groups. Pure and import-free so the Node test
-// runner can load this file alone. The live even-split / by-item screen
-// does not import this module. A group file (.etsplit) is merged by the
-// import screen: last writer wins by updatedAt, and deviceId breaks ties.
+// runner can load this file alone. The Groups tab on the split screen
+// uses this ledger. A group file (.etsplit) is merged by the import
+// screen: last writer wins by updatedAt, and deviceId breaks ties.
 //
 // Money is integer cents. Equal splits deal leftover cents to the first
 // people in line order. Percent, shares, tax and tip use largest-remainder

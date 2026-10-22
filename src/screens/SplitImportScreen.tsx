@@ -1,11 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { File, Paths } from 'expo-file-system';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { Card, GhostButton, PrimaryButton, ToolShell } from '../components/ui';
 import { shareFile, shareText, tempFileUri } from '../lib/files';
 import { renderSummaryPng } from '../lib/splitSummaryPng';
+import { loadDeviceId } from '../lib/deviceId';
 import {
   SPLIT_FILE_MIME,
   SPLIT_LEDGER_STORAGE_KEY,
@@ -22,9 +23,6 @@ import {
 import type { Palette } from '../theme';
 import { useThemed } from '../useTheme';
 
-function thisPhone(): string {
-  return `ios-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
 
 /**
  * Opens when someone taps an .etsplit file. Shows the merge counts, then
@@ -51,13 +49,18 @@ export function SplitImportScreen({
   const [applied, setApplied] = useState<SplitLedger | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+
+  useEffect(() => {
+    void loadDeviceId().then(setDeviceId);
+  }, []);
 
   const summary =
     applied && parsed.ok ? groupSummary(applied, parsed.file.groupId) : null;
   const blocked = !parsed.ok ? parsed.error : !storedResult.ok ? storedResult.error : null;
 
   const onImport = () => {
-    if (!parsed.ok || !storedResult.ok || !preview?.ok || busy) return;
+    if (!parsed.ok || !storedResult.ok || !preview?.ok || busy || !deviceId) return;
     setBusy(true);
     const result = applyGroupImport(storedResult.ledger, parsed.file);
     if (!result.ok) {
@@ -65,7 +68,7 @@ export function SplitImportScreen({
       setBusy(false);
       return;
     }
-    const ledger = assignDeviceId(result.ledger, thisPhone());
+    const ledger = assignDeviceId(result.ledger, deviceId);
     void AsyncStorage.setItem(SPLIT_LEDGER_STORAGE_KEY, serializeLedger(ledger))
       .then(() => {
         setApplied(ledger);
@@ -95,7 +98,7 @@ export function SplitImportScreen({
   const onShareFile = async () => {
     if (!applied || !parsed.ok) return;
     const exported = exportGroupFile(applied, parsed.file.groupId, {
-      deviceId: applied.deviceId ?? thisPhone(),
+      deviceId: applied.deviceId ?? deviceId ?? '',
       exportedAt: Date.now(),
     });
     if (!exported.ok) {

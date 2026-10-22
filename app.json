@@ -73,6 +73,7 @@
     "icon": "./assets/icon.png",
     "ios": {
       "appleTeamId": "8H56KM6SCW",
+      "buildNumber": "12",
       "bundleIdentifier": "app.everytool.ios",
       "entitlements": {
         "com.apple.security.application-groups": [

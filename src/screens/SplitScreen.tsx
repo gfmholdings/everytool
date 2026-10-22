@@ -1,5 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Card, Field, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
@@ -16,6 +16,7 @@ import {
 import { liveTextSupported, recognizeText, scanDocumentPages, scanLiveText } from '../store/sharedVault';
 import type { Palette } from '../theme';
 import { useThemed } from '../useTheme';
+import { SplitGroups, type HistoryNav } from './SplitGroups';
 
 const PERSON = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
@@ -53,7 +54,11 @@ export function SplitScreen({
   notify?: (msg: string, action?: { label: string; onPress: () => void }) => void;
 }) {
   const { type, styles } = useThemed(makeStyles);
-  const [mode, setMode] = useState<'even' | 'items'>('even');
+  const [mode, setMode] = useState<'even' | 'items' | 'groups'>('even');
+  const [groupNav, setGroupNav] = useState<HistoryNav | null>(null);
+  const onGroupNav = useCallback((nav: HistoryNav) => {
+    setGroupNav(nav);
+  }, []);
   const bill = useUndoHistory<Bill>(emptyBill, { shake: true });
   const { items, assign, totalStr, taxStr, tipPct, customTip, people } = bill.present;
   const [newName, setNewName] = useState('');
@@ -230,21 +235,32 @@ export function SplitScreen({
     <ToolShell
       title="Split bill"
       onBack={onBack}
-      undo={{
-        canUndo: bill.canUndo,
-        canRedo: bill.canRedo,
-        onUndo: () => bill.undo(),
-        onRedo: () => bill.redo(),
-      }}
+      undo={
+        mode === 'groups'
+          ? {
+              canUndo: groupNav?.canUndo ?? false,
+              canRedo: groupNav?.canRedo ?? false,
+              onUndo: () => groupNav?.undo(),
+              onRedo: () => groupNav?.redo(),
+            }
+          : {
+              canUndo: bill.canUndo,
+              canRedo: bill.canRedo,
+              onUndo: () => bill.undo(),
+              onRedo: () => bill.redo(),
+            }
+      }
     >
       <Segmented
         options={[
           { id: 'even', label: 'Split evenly' },
           { id: 'items', label: 'By item' },
+          { id: 'groups', label: 'Groups' },
         ]}
         value={mode}
         onChange={setMode}
       />
+      {mode === 'groups' && <SplitGroups notify={notify} onHistory={onGroupNav} />}
       {mode === 'items' && (
         <>
           <View style={styles.row}>
@@ -369,6 +385,8 @@ export function SplitScreen({
         keyboard="decimal-pad"
       />
       )}
+      {mode !== 'groups' && (
+      <>
       <Field
         value={taxStr}
         onChange={(value) => bill.commit((current) => ({ ...current, taxStr: value }), true)}
@@ -477,6 +495,8 @@ export function SplitScreen({
           }
         />
       </Card>
+      )}
+      </>
       )}
     </ToolShell>
   );

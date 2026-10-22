@@ -1,5 +1,5 @@
 // Preset frames for the Resize tool. Pure data and crop math. The screen
-// still uses its own width chips; nothing here is wired to the UI yet.
+// keeps its width chips and adds these frames below that flow.
 //
 // Pixel sizes are the upload frames each platform documents, or the print
 // size at 300 dpi for passport photos. Where a platform does not publish a
@@ -730,6 +730,43 @@ export function cropForFrame(
       ? Math.max(frame.width / box.width, frame.height / box.height)
       : Math.min(frame.width / box.width, frame.height / box.height);
   return { scale, rotation: normalizeRotation(rotation), offsetX: 0, offsetY: 0 };
+}
+
+export interface SourceCropRect {
+  originX: number;
+  originY: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Integer source crop for a fill export at rotation 0. The cropped pixels
+ * scale up to the frame. Null when the crop cannot cover the frame.
+ */
+export function fillCropRect(source: PhotoSize, frame: PhotoSize, crop: PhotoCrop): SourceCropRect | null {
+  if (crop.rotation !== 0) return null;
+  if (source.width <= 0 || source.height <= 0 || frame.width <= 0 || frame.height <= 0) return null;
+  if (!(crop.scale > 0)) return null;
+  const cropW = frame.width / crop.scale;
+  const cropH = frame.height / crop.scale;
+  if (cropW > source.width + 0.51 || cropH > source.height + 0.51) return null;
+  const width = Math.max(1, Math.min(source.width, Math.round(cropW)));
+  const height = Math.max(1, Math.min(source.height, Math.round(cropH)));
+  const rawX = source.width / 2 - crop.offsetX / crop.scale - cropW / 2;
+  const rawY = source.height / 2 - crop.offsetY / crop.scale - cropH / 2;
+  const originX = Math.max(0, Math.min(source.width - width, Math.round(rawX)));
+  const originY = Math.max(0, Math.min(source.height - height, Math.round(rawY)));
+  return { originX, originY, width, height };
+}
+
+/** Pixel size of a fit export. The whole photo stays inside the frame. */
+export function fitExportSize(source: PhotoSize, frame: PhotoSize): PhotoSize | null {
+  const crop = cropForFrame(source, frame, 'fit', 0);
+  if (!crop) return null;
+  return {
+    width: Math.max(1, Math.round(source.width * crop.scale)),
+    height: Math.max(1, Math.round(source.height * crop.scale)),
+  };
 }
 
 /** Keep a fill crop covering the frame, and keep a fit crop inside the frame. */

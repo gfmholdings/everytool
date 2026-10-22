@@ -241,7 +241,7 @@ function Root() {
         return;
       }
       // A text, HTML, CSV, Markdown, RTF, or web archive from Files.
-      // The copy is kept. The PDF screen does not convert it until the hub is approved.
+      // The copy is kept. The PDF screen converts the formats it can read offline.
       if (route.kind === 'convert') {
         const opened = takeOpenedPdf(url);
         openTool('pdf', {
@@ -341,7 +341,14 @@ function Root() {
       );
       break;
     case 'pdf':
-      screen = <PdfScreen onBack={back} initialPdf={pending?.pdf} notify={notify} />;
+      screen = (
+        <PdfScreen
+          onBack={back}
+          initialPdf={pending?.pdf}
+          convertFiles={pending?.convertFiles}
+          notify={notify}
+        />
+      );
       break;
     case 'text':
       screen = <TextScreen onBack={back} notify={notify} />;

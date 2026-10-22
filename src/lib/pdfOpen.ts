@@ -5,9 +5,9 @@
  * com.adobe.pdf at LSHandlerRank Alternate, so it shows up under Open In
  * and the share sheet. It does not replace the system's viewer.
  *
- * A PDF that arrives here opens the existing PDF tool (merge, split,
- * compress) with the file loaded. Sign & Fill stays unwired until those
- * mockups are approved.
+ * A PDF that arrives here opens the PDF tool with the file loaded.
+ * Sign and fill, page order, numbers, watermark, and target size live
+ * on that same screen.
  *
  * The native handler copies a security-scoped URL into the app sandbox
  * before this module sees it. These functions only decide the route.
@@ -15,7 +15,7 @@
 
 export const PDF_UTI = 'com.adobe.pdf';
 export const PDF_HANDLER_RANK = 'Alternate' as const;
-/** Existing PDF tool. Sign & Fill is a later screen. */
+/** Existing PDF tool. Sign and fill is a section on that screen. */
 export const PDF_OPEN_SCREEN = 'viewer' as const;
 
 export interface PdfDocumentRoute {
@@ -63,7 +63,7 @@ export const CONVERT_OPEN_UTIS = [
 export interface ConvertDocumentRoute {
   kind: 'convert';
   tool: 'pdf';
-  /** The hub screen is not built yet. The PDF tool opens without pretending this file is a PDF. */
+  /** The PDF tool converts this file. It is not loaded as an existing PDF. */
   screen: 'convert';
   name: string;
 }

@@ -521,6 +521,10 @@ workflows:
           printf '%s' "$ASC_API_KEY_B64" | base64 --decode > "$KEY_PATH"
           chmod 600 "$KEY_PATH"
 
+          # Floor matches app.json ios.buildNumber. A successful App Store
+          # Connect lookup still wins when TestFlight is already past it,
+          # so a repeat upload does not reuse 12.
+          FLOOR=12
           EFFECTIVE=""
           if ! command -v app-store-connect >/dev/null 2>&1; then
             echo "app-store-connect CLI is not on PATH (exit status: missing)."
@@ -540,12 +544,12 @@ workflows:
             echo "get-latest-testflight-build-number exit status: $STATUS"
             if [ "$STATUS" -eq 0 ] && printf '%s' "$LATEST" | grep -Eq '^[0-9]+$'; then
               EFFECTIVE=$((LATEST + 1))
-              echo "Latest TestFlight build is $LATEST; this build is $EFFECTIVE"
+              echo "Latest TestFlight build is $LATEST; next build is $EFFECTIVE"
             fi
           fi
-          if [ -z "$EFFECTIVE" ]; then
-            EFFECTIVE=$((BUILD_NUMBER + 1000))
-            echo "No numeric latest build; using BUILD_NUMBER+1000 = $EFFECTIVE"
+          if [ -z "$EFFECTIVE" ] || [ "$EFFECTIVE" -lt "$FLOOR" ]; then
+            echo "Using build floor $FLOOR (lookup result: ${EFFECTIVE:-none})"
+            EFFECTIVE=$FLOOR
           fi
           echo "EFFECTIVE_BUILD_NUMBER=$EFFECTIVE" >> "$CM_ENV"
       - name: Show Xcode version
