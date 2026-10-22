@@ -40,6 +40,8 @@ interface Pending {
   tool: ToolId;
   image?: { uri: string; width: number; height: number };
   pdf?: { uri: string; name: string };
+  /** Files for Any file → PDF. The PDF screen does not read this yet. */
+  convertFiles?: { uri: string; name: string }[];
   stitchShots?: ShotInput[];
   text?: string;
   autoRecord?: boolean;
@@ -140,6 +142,14 @@ function Root() {
         openTool('clipboard');
         return true;
       }
+      if (item.kind === 'convert' || items.some((entry) => entry.item.kind === 'convert')) {
+        openTool('pdf', {
+          convertFiles: items
+            .filter((entry) => entry.item.kind === 'convert')
+            .map((entry) => ({ uri: entry.uri, name: entry.item.name ?? entry.item.file })),
+        });
+        return true;
+      }
       if (item.kind === 'pdf') {
         const target = pdfTargetFromShare([item]);
         openTool('pdf', { pdf: { uri, name: target?.name ?? item.name ?? item.file } });
@@ -195,6 +205,15 @@ function Root() {
         const opened = takeOpenedPdf(url);
         openTool('pdf', {
           pdf: { uri: opened?.uri ?? url, name: opened?.name ?? route.name },
+        });
+        return;
+      }
+      // A text, HTML, CSV, Markdown, RTF, or web archive from Files.
+      // The copy is kept. The PDF screen does not convert it until the hub is approved.
+      if (route.kind === 'convert') {
+        const opened = takeOpenedPdf(url);
+        openTool('pdf', {
+          convertFiles: [{ uri: opened?.uri ?? url, name: opened?.name ?? route.name }],
         });
         return;
       }

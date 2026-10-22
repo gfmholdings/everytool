@@ -31,7 +31,44 @@ export interface ToolLinkRoute {
   ref: string;
 }
 
-export type IncomingRoute = PdfDocumentRoute | ToolLinkRoute | { kind: 'ignore' };
+/**
+ * Files Open In for the types this phone can turn into a PDF.
+ * Photos stay on the share sheet so Open In does not grab a picture.
+ * Office and iWork stay off this list: Quick Look cannot export them.
+ */
+export const CONVERT_OPEN_EXTENSIONS = [
+  'txt',
+  'text',
+  'md',
+  'markdown',
+  'rtf',
+  'rtfd',
+  'html',
+  'htm',
+  'csv',
+  'webarchive',
+] as const;
+
+export const CONVERT_OPEN_UTIS = [
+  'public.plain-text',
+  'public.utf8-plain-text',
+  'public.rtf',
+  'public.rtfd',
+  'public.html',
+  'public.comma-separated-values-text',
+  'net.daringfireball.markdown',
+  'com.apple.webarchive',
+] as const;
+
+export interface ConvertDocumentRoute {
+  kind: 'convert';
+  tool: 'pdf';
+  /** The hub screen is not built yet. The PDF tool opens without pretending this file is a PDF. */
+  screen: 'convert';
+  name: string;
+}
+
+export type IncomingRoute = PdfDocumentRoute | ConvertDocumentRoute | ToolLinkRoute | { kind: 'ignore' };
 
 export interface ShareInboxItem {
   kind: string;
@@ -108,14 +145,51 @@ export function toolRefFromUrl(raw: string): string | null {
   return null;
 }
 
+function fileExtension(raw: string): string {
+  const url = parsed(raw);
+  if (!url || url.protocol !== 'file:') return '';
+  const name = lastSegment(url);
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0) return '';
+  return name.slice(dot + 1).toLowerCase();
+}
+
+/** A text, HTML, CSV, Markdown, RTF, or web-archive file opened from Files. */
+export function isConvertOpenFileUrl(raw: string): boolean {
+  return (CONVERT_OPEN_EXTENSIONS as readonly string[]).includes(fileExtension(raw));
+}
+
+export function convertDisplayName(raw: string): string {
+  const url = parsed(raw);
+  const segment = url ? lastSegment(url) : '';
+  const base = segment.replace(/[\\/:*?"<>|]/g, '').trim();
+  return base || 'document.txt';
+}
+
 /**
- * A PDF file URL opens the PDF tool. An everytool:// link stays a tool
- * link — the share extension uses one of those after it has copied the
- * file into the inbox.
+ * File name inside the sandbox copy. The extension stays, so a CSV is not
+ * stored as a PDF. `unique` keeps two opens from overwriting each other.
+ */
+export function sandboxConvertFileName(displayName: string, unique: string): string {
+  const clean = displayName.replace(/[\\/:*?"<>|]/g, '').trim() || 'document.txt';
+  const dot = clean.lastIndexOf('.');
+  const ext = dot > 0 ? clean.slice(dot + 1).toLowerCase() : 'txt';
+  const stem = (dot > 0 ? clean.slice(0, dot) : clean).trim().slice(0, 80) || 'document';
+  const id = unique.replace(/[^A-Za-z0-9_-]/g, '') || 'open';
+  return `${id}-${stem}.${ext}`;
+}
+
+/**
+ * A PDF file URL opens the PDF tool. A convertible file URL opens the same
+ * tool for Any file → PDF. An everytool:// link stays a tool link — the
+ * share extension uses one of those after it has copied the file into the inbox.
  */
 export function routeIncomingUrl(raw: string): IncomingRoute {
   if (isPdfFileUrl(raw)) {
     return { kind: 'pdf', tool: 'pdf', screen: PDF_OPEN_SCREEN, name: pdfDisplayName(raw) };
+  }
+  if (isConvertOpenFileUrl(raw)) {
+    return { kind: 'convert', tool: 'pdf', screen: 'convert', name: convertDisplayName(raw) };
   }
   const ref = toolRefFromUrl(raw);
   if (ref) return { kind: 'tool', ref };

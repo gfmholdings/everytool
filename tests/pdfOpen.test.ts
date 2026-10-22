@@ -3,13 +3,17 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
+  CONVERT_OPEN_UTIS,
   PDF_HANDLER_RANK,
   PDF_OPEN_SCREEN,
   PDF_UTI,
+  convertDisplayName,
+  isConvertOpenFileUrl,
   isPdfFileUrl,
   pdfDisplayName,
   pdfTargetFromShare,
   routeIncomingUrl,
+  sandboxConvertFileName,
   sandboxPdfFileName,
   shareActionFor,
   toolRefFromUrl,
@@ -31,12 +35,16 @@ test('document handler: com.adobe.pdf at Alternate, in place, no default claim',
     LSHandlerRank: string;
     LSItemContentTypes: string[];
   }[];
-  assert.equal(types.length, 1);
+  assert.equal(types.length, 2);
   assert.equal(types[0]!.LSHandlerRank, PDF_HANDLER_RANK);
   assert.equal(types[0]!.LSHandlerRank, 'Alternate');
   assert.deepEqual(types[0]!.LSItemContentTypes, [PDF_UTI]);
   assert.equal(types[0]!.CFBundleTypeRole, 'Viewer');
   assert.equal(PDF_UTI, 'com.adobe.pdf');
+  assert.equal(types[1]!.CFBundleTypeName, 'Document');
+  assert.equal(types[1]!.LSHandlerRank, 'Alternate');
+  assert.equal(types[1]!.CFBundleTypeRole, 'Viewer');
+  assert.deepEqual(types[1]!.LSItemContentTypes, [...CONVERT_OPEN_UTIS]);
 });
 
 test('incoming URL: a PDF file opens the existing PDF tool, not Sign & Fill', () => {
@@ -55,9 +63,22 @@ test('incoming URL: a PDF file opens the existing PDF tool, not Sign & Fill', ()
   assert.equal(routeIncomingUrl('file:///tmp/My%20Lease.PDF').kind, 'pdf');
 });
 
-test('incoming URL: other files and web links are not PDF opens', () => {
-  assert.equal(routeIncomingUrl('file:///tmp/notes.txt').kind, 'ignore');
+test('incoming URL: text and HTML from Files open convert; photos and Office do not', () => {
+  assert.deepEqual(routeIncomingUrl('file:///tmp/notes.txt'), {
+    kind: 'convert',
+    tool: 'pdf',
+    screen: 'convert',
+    name: 'notes.txt',
+  });
+  assert.equal(routeIncomingUrl('file:///tmp/budget.csv').kind, 'convert');
+  assert.equal(routeIncomingUrl('file:///tmp/page.html').kind, 'convert');
+  assert.equal(isConvertOpenFileUrl('file:///tmp/saved.webarchive'), true);
+  assert.equal(convertDisplayName('file:///tmp/My%20Notes.md'), 'My Notes.md');
+  assert.equal(sandboxConvertFileName('My Notes.md', '171'), '171-My Notes.md');
+  // Photos stay on the share sheet. Office is not an Open In type.
   assert.equal(routeIncomingUrl('file:///tmp/photo.png').kind, 'ignore');
+  assert.equal(routeIncomingUrl('file:///tmp/Report.docx').kind, 'ignore');
+  assert.equal(routeIncomingUrl('file:///tmp/Deck.key').kind, 'ignore');
   assert.equal(routeIncomingUrl('https://example.com/lease.pdf').kind, 'ignore');
   assert.equal(isPdfFileUrl('everytool://tool/pdf'), false);
 });
@@ -128,4 +149,7 @@ test('native open handler copies a security-scoped PDF before JS reads it', () =
   assert.match(share, /route\("pdf"\)/);
   assert.match(share, /onRouted\("pdf"\)/);
   assert.match(share, /kind == "pdf"/);
+  assert.match(swift, /convertExtensions/);
+  assert.match(swift, /"csv"/);
+  assert.match(swift, /sandboxConvertFileName/);
 });

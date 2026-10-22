@@ -67,13 +67,14 @@ export const PDF_HUB: readonly PdfHubItem[] = [
   { id: 'ocr', name: 'OCR', status: 'device', engine: 'Vision' },
   { id: 'sign', name: 'Sign & Fill', status: 'groundwork', engine: 'pdf-lib' },
   { id: 'to-text', name: 'PDF to text', status: 'groundwork', engine: 'literal strings; PDFKit on device' },
+  { id: 'any-file', name: 'Any file to PDF', status: 'groundwork', engine: 'pdf-lib; WKWebView and ImageIO on device' },
   { id: 'office', name: 'Office to PDF', status: 'not-feasible', engine: 'none' },
 ];
 
 export const OFFICE_TO_PDF = {
   feasible: false as const,
   reason:
-    'There is no on-device Word, Excel, or PowerPoint engine. QuickLook can preview some Office files and WebKit can print a web page, and neither is a reliable offline converter for docx, xlsx, or pptx.',
+    'There is no on-device Word, Excel, or PowerPoint engine. QuickLook can preview docx, xlsx, or pptx, and Pages, Numbers, and Keynote, but it does not export a PDF. WKWebView and UIPrintPageRenderer only print a web page they have already drawn, and they cannot open those files.',
 };
 
 const LOAD = { ignoreEncryption: true } as const;

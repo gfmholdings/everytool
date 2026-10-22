@@ -75,6 +75,7 @@ test('pdf hub: the current screen, the new work, and what cannot be done offline
   assert.equal(byId.protect, 'device');
   assert.equal(byId.unlock, 'device');
   assert.equal(byId.ocr, 'device');
+  assert.equal(byId['any-file'], 'groundwork');
   assert.equal(byId.office, 'not-feasible');
   assert.equal(OFFICE_TO_PDF.feasible, false);
   assert.match(OFFICE_TO_PDF.reason, /docx, xlsx, or pptx/);

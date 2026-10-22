@@ -102,6 +102,21 @@
             "CFBundleTypeRole": "Viewer",
             "LSHandlerRank": "Alternate",
             "LSItemContentTypes": ["com.adobe.pdf"]
+          },
+          {
+            "CFBundleTypeName": "Document",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": [
+              "public.plain-text",
+              "public.utf8-plain-text",
+              "public.rtf",
+              "public.rtfd",
+              "public.html",
+              "public.comma-separated-values-text",
+              "net.daringfireball.markdown",
+              "com.apple.webarchive"
+            ]
           }
         ],
         "LSSupportsOpeningDocumentsInPlace": true,

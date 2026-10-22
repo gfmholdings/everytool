@@ -66,7 +66,7 @@ private func imageExtension(for data: Data) -> String {
 struct SharedItem: Identifiable {
     let id = UUID()
     let url: URL
-    let kind: String  // "image" | "pdf" | "text"
+    let kind: String  // "image" | "pdf" | "text" | "convert"
     var isTextPayload = false
 }
 
@@ -93,6 +93,11 @@ final class ShareModel: ObservableObject {
                 } else if provider.hasItemConformingToTypeIdentifier(UTType.pdf.identifier),
                           let url = await loadFile(provider, type: UTType.pdf.identifier) {
                     loaded.append(SharedItem(url: url, kind: "pdf"))
+                } else if let url = await loadConvertFile(provider) {
+                    // HTML, RTF, CSV, Markdown, a web archive, or an Office
+                    // or iWork file. Plain text stays text so clipboard still
+                    // has its button; Convert to PDF is offered beside it.
+                    loaded.append(SharedItem(url: url, kind: "convert"))
                 } else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier),
                           let text = await loadText(provider) {
                     // Text rides through the inbox as a .txt file; the app
@@ -104,8 +109,10 @@ final class ShareModel: ObservableObject {
                 } else if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier),
                           let url = await loadURL(provider) {
                     let tmp = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("shared-\(UUID().uuidString).txt")
+                        .appendingPathComponent("shared-\(UUID().uuidString).weblink")
                     try? url.absoluteString.data(using: .utf8)?.write(to: tmp)
+                    // .weblink so Convert to PDF treats this as a page address,
+                    // not as a text file. Clipboard still reads the address.
                     loaded.append(SharedItem(url: tmp, kind: "text", isTextPayload: true))
                 }
             }
@@ -122,8 +129,44 @@ final class ShareModel: ObservableObject {
         UTType.heic.identifier,
         "public.heif",
         UTType.gif.identifier,
+        "public.tiff",
+        "org.webmproject.webp",
+        "com.microsoft.bmp",
         UTType.image.identifier,
     ]
+
+    /// Named outright. A file that merely conforms to public.text is not
+    /// enough: the share sheet has already dropped concrete types that way.
+    private static let convertTypeOrder = [
+        "public.html",
+        "public.rtf",
+        "public.rtfd",
+        "public.comma-separated-values-text",
+        "net.daringfireball.markdown",
+        "com.apple.webarchive",
+        "org.openxmlformats.wordprocessingml.document",
+        "org.openxmlformats.spreadsheetml.sheet",
+        "org.openxmlformats.presentationml.presentation",
+        "com.apple.iwork.pages.sffpages",
+        "com.apple.iwork.pages.pages",
+        "com.apple.iwork.numbers.sffnumbers",
+        "com.apple.iwork.numbers.numbers",
+        "com.apple.iwork.keynote.sffkey",
+        "com.apple.iwork.keynote.key",
+        "com.apple.iwork.pages",
+        "com.apple.iwork.numbers",
+        "com.apple.iwork.keynote",
+    ]
+
+    private func loadConvertFile(_ provider: NSItemProvider) async -> URL? {
+        let types = Self.convertTypeOrder.filter {
+            provider.hasItemConformingToTypeIdentifier($0)
+        }
+        for type in types {
+            if let url = await loadFile(provider, type: type) { return url }
+        }
+        return nil
+    }
 
     private func loadBestImage(_ provider: NSItemProvider) async -> URL? {
         let types = Self.imageTypeOrder.filter {
@@ -185,37 +228,55 @@ final class ShareModel: ObservableObject {
         }
     }
 
-    /// The tools that make sense for what's being shared.
+    /// Same choices as shareRoutesFor in src/lib/pdfConvert.ts.
     var routes: [(tool: String, label: String)] {
-        if items.contains(where: { $0.kind == "text" }) {
-            return [("clipboard", "Save to clipboard")]
-        }
-        if items.contains(where: { $0.kind == "pdf" }) {
+        let kinds = items.map(\.kind)
+        if kinds.isEmpty { return [] }
+        if kinds.allSatisfy({ $0 == "pdf" }) {
             return [("pdf", "PDF tools")]
         }
-        if items.count > 1 {
-            return [
-                ("stitch", "Stitch together"),
-                ("convert", "Convert first photo"),
-            ]
+        var routes: [(tool: String, label: String)] = []
+        if kinds.contains("text") {
+            routes.append(("clipboard", "Save to clipboard"))
         }
-        return [
-            ("convert", "Convert"),
-            ("resize", "Resize"),
-            ("qr", "Scan QR code"),
-            ("stitch", "Stitch"),
-        ]
+        let imagesOnly = kinds.allSatisfy { $0 == "image" }
+        if imagesOnly && items.count > 1 {
+            routes.append(("stitch", "Stitch together"))
+            routes.append(("convert", "Convert first photo"))
+        } else if imagesOnly {
+            routes.append(("convert", "Convert"))
+            routes.append(("resize", "Resize"))
+            routes.append(("qr", "Scan QR code"))
+            routes.append(("stitch", "Stitch"))
+        } else if kinds.contains("pdf") {
+            routes.append(("pdf", "PDF tools"))
+        }
+        if officeShareNote == nil {
+            routes.append(("pdf-convert", "Convert to PDF"))
+        }
+        return routes
+    }
+
+    /// Office and iWork only. Quick Look can preview them and cannot export a PDF.
+    var officeShareNote: String? {
+        let blocked: Set<String> = ["docx", "xlsx", "pptx", "pages", "numbers", "key"]
+        let names = items.map { $0.url.lastPathComponent }
+        guard !names.isEmpty else { return nil }
+        let exts = names.map { ($0 as NSString).pathExtension.lowercased() }
+        guard exts.allSatisfy({ blocked.contains($0) }) else { return nil }
+        return "Word, Excel, PowerPoint, Pages, Numbers, and Keynote cannot be turned into a PDF on this phone. Quick Look can preview them. It does not export a PDF."
     }
 
     /// Copy everything into the App Group inbox under the chosen route.
     /// The app drains the inbox on launch and opens the first item's
     /// tool (for stitch it uses the whole batch).
     func route(_ tool: String) {
+        let converting = tool == "pdf-convert"
         for item in items {
             _ = SharedVault.addToShareInbox(
                 sourceURL: item.url,
-                kind: item.kind,
-                tool: item.isTextPayload ? "clipboard" : tool
+                kind: converting ? "convert" : item.kind,
+                tool: converting ? "pdf" : (item.isTextPayload ? "clipboard" : tool)
             )
         }
         routed = tool
@@ -241,7 +302,7 @@ struct ShareView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else if model.items.isEmpty {
-                Text("Nothing Everytool can use here — it takes photos, PDFs and text.")
+                Text("Nothing Everytool can use here — it takes photos, PDFs, text, and files it can turn into a PDF.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -252,10 +313,16 @@ struct ShareView: View {
                 Text(summary)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                if let note = model.officeShareNote {
+                    Text(note)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
                 ForEach(model.routes, id: \.tool) { route in
                     Button {
                         model.route(route.tool)
-                        onRouted(route.tool)
+                        onRouted(route.tool == "pdf-convert" ? "pdf" : route.tool)
                     } label: {
                         Text(route.label)
                             .frame(maxWidth: .infinity)
@@ -283,10 +350,12 @@ struct ShareView: View {
         let images = model.items.filter { $0.kind == "image" }.count
         let pdfs = model.items.filter { $0.kind == "pdf" }.count
         let texts = model.items.filter { $0.kind == "text" }.count
+        let files = model.items.filter { $0.kind == "convert" }.count
         var parts: [String] = []
         if images > 0 { parts.append(images == 1 ? "1 photo" : "\(images) photos") }
         if pdfs > 0 { parts.append(pdfs == 1 ? "1 PDF" : "\(pdfs) PDFs") }
         if texts > 0 { parts.append("text") }
+        if files > 0 { parts.append(files == 1 ? "1 file" : "\(files) files") }
         return parts.joined(separator: " · ")
     }
 

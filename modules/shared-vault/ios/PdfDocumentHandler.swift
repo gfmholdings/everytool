@@ -23,6 +23,12 @@ enum OpenedPdfs {
   private static var copies: [String: Copy] = [:]
   private static let lock = NSLock()
 
+  /// Extensions Files may hand over for Any file → PDF. Photos and Office
+  /// stay off this list. Same set as CONVERT_OPEN_EXTENSIONS in pdfOpen.ts.
+  static let convertExtensions: Set<String> = [
+    "txt", "text", "md", "markdown", "rtf", "rtfd", "html", "htm", "csv", "webarchive",
+  ]
+
   /// Same character rules as `sandboxPdfFileName` in src/lib/pdfOpen.ts.
   static func sandboxFileName(displayName: String, unique: String) -> String {
     var stem = displayName
@@ -45,8 +51,34 @@ enum OpenedPdfs {
 
   static func displayName(for url: URL) -> String {
     let raw = url.lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+    let ext = url.pathExtension.lowercased()
+    if ext != "pdf" && convertExtensions.contains(ext) {
+      if raw.isEmpty { return "document.\(ext)" }
+      return raw
+    }
     if raw.isEmpty { return "document.pdf" }
     return raw.lowercased().hasSuffix(".pdf") ? raw : "\(raw).pdf"
+  }
+
+  /// Same character rules as `sandboxConvertFileName` in src/lib/pdfOpen.ts.
+  static func sandboxConvertFileName(displayName: String, unique: String) -> String {
+    var clean = displayName.components(separatedBy: CharacterSet(charactersIn: "\\/:*?\"<>|")).joined()
+    clean = clean.trimmingCharacters(in: .whitespacesAndNewlines)
+    if clean.isEmpty { clean = "document.txt" }
+    let ext = (clean as NSString).pathExtension.lowercased()
+    var stem = (clean as NSString).deletingPathExtension
+    stem = stem.trimmingCharacters(in: .whitespacesAndNewlines)
+    if stem.isEmpty { stem = "document" }
+    if stem.count > 80 { stem = String(stem.prefix(80)) }
+    let id = unique.unicodeScalars.filter { scalar in
+      (scalar.value >= 48 && scalar.value <= 57)
+        || (scalar.value >= 65 && scalar.value <= 90)
+        || (scalar.value >= 97 && scalar.value <= 122)
+        || scalar.value == 45 || scalar.value == 95
+    }.map { Character($0) }
+    let safeId = id.isEmpty ? "open" : String(id)
+    let suffix = ext.isEmpty ? "txt" : ext
+    return "\(safeId)-\(stem).\(suffix)"
   }
 
   private static func directory() -> URL {
@@ -60,14 +92,19 @@ enum OpenedPdfs {
   /// Start security-scoped access, copy the bytes into the sandbox, then
   /// drop the scope. The caller's file is left where it was.
   static func adopt(_ url: URL) {
-    guard url.isFileURL, url.pathExtension.lowercased() == "pdf" else { return }
+    let ext = url.pathExtension.lowercased()
+    let convertible = convertExtensions.contains(ext)
+    guard url.isFileURL, ext == "pdf" || convertible else { return }
     let accessing = url.startAccessingSecurityScopedResource()
     defer {
       if accessing { url.stopAccessingSecurityScopedResource() }
     }
     let name = displayName(for: url)
     let unique = "\(Int(Date().timeIntervalSince1970 * 1000))-\(UUID().uuidString.prefix(6))"
-    let dest = directory().appendingPathComponent(sandboxFileName(displayName: name, unique: unique))
+    let stored = convertible
+      ? sandboxConvertFileName(displayName: name, unique: unique)
+      : sandboxFileName(displayName: name, unique: unique)
+    let dest = directory().appendingPathComponent(stored)
     // copyItem while the scope is held. A coordinator here runs on the
     // main thread inside openURL and can deadlock against a file presenter.
     do {
@@ -110,7 +147,8 @@ public class PdfDocumentHandler: ExpoAppDelegateSubscriber {
     open url: URL,
     options: [UIApplication.OpenURLOptionsKey: Any] = [:]
   ) -> Bool {
-    guard url.isFileURL, url.pathExtension.lowercased() == "pdf" else { return false }
+    let ext = url.pathExtension.lowercased()
+    guard url.isFileURL, ext == "pdf" || OpenedPdfs.convertExtensions.contains(ext) else { return false }
     OpenedPdfs.adopt(url)
     return true
   }

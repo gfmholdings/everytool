@@ -10,14 +10,13 @@
       <string>$(PRODUCT_MODULE_NAME).ShareViewController</string>
       <key>NSExtensionAttributes</key>
       <dict>
-        <!-- Images, PDFs and text only — the three kinds Everytool can
-             actually route somewhere useful.
+        <!-- Photos, PDFs, text, and the files Any file → PDF can try.
              A dictionary rule (NSExtensionActivationSupportsImageWithMaxCount)
              does not offer the extension for public.png: the share sheet
              treats that key as photos (JPEG/HEIC) and a PNG never appears
-             as allowed. The predicate names public.png, public.jpeg and
-             public.heic explicitly, and still accepts anything that
-             conforms to public.image, plus PDF, text and URLs. -->
+             as allowed. Concrete types are named outright, including HTML,
+             CSV, Markdown, Office, and iWork. public.image and public.text
+             stay as a fallback. -->
         <key>NSExtensionActivationRule</key>
         <string>SUBQUERY (
             extensionItems,
@@ -44,6 +43,52 @@
                 ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.plain-text"
                 OR
                 ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.url"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.gif"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.tiff"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "org.webmproject.webp"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.microsoft.bmp"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.utf8-plain-text"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.rtf"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.rtfd"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.html"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.comma-separated-values-text"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "net.daringfireball.markdown"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.webarchive"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "org.openxmlformats.wordprocessingml.document"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "org.openxmlformats.spreadsheetml.sheet"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "org.openxmlformats.presentationml.presentation"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.pages.sffpages"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.pages.pages"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.numbers.sffnumbers"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.numbers.numbers"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.keynote.sffkey"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.keynote.key"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.pages"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.numbers"
+                OR
+                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.keynote"
             ).@count &gt;= 1
         ).@count &gt;= 1</string>
       </dict>
