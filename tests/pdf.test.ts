@@ -2,13 +2,16 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import { PDFDocument, PDFName, PDFNumber, PDFRawStream, StandardFonts } from 'pdf-lib';
+import { PDFDocument, PDFHexString, PDFName, PDFNumber, PDFRawStream, PDFString, StandardFonts } from 'pdf-lib';
 
 import {
+  COMPRESS_RASTERIZES_PAGES,
   compressPdfBytes,
+  compressPdfToTarget,
   extractPdfBytes,
   mergePdfBytes,
   pageCountOf,
+  readPdfStructure,
   shrinkPdfImages,
 } from '../src/lib/pdfCore.ts';
 import { specToIndices } from '../src/lib/pages.ts';
@@ -185,4 +188,165 @@ test('pdf shrink photos: text-only PDFs and failing encoders are safe', async ()
   });
   assert.equal(failed.replaced, 0);
   assert.equal(await pageCountOf(failed.bytes), 2);
+});
+
+/** Text, a link, bookmarks, a form, a signature, and two copies of one photo. */
+async function structuredPdf(): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  doc.setTitle('Lease');
+  doc.setAuthor('Ada Lovelace');
+  doc.setSubject('Service agreement');
+  doc.setKeywords(['private']);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const page1 = doc.addPage([500, 700]);
+  const page2 = doc.addPage([640, 800]);
+  page1.drawText('Alpha page', { x: 48, y: 640, size: 18, font });
+  page2.drawText('Beta page', { x: 48, y: 740, size: 18, font });
+  const photo = await doc.embedJpg(JPG);
+  const copy = await doc.embedJpg(JPG);
+  page1.drawImage(photo, { x: 48, y: 300, width: 200, height: 150 });
+  page2.drawImage(copy, { x: 48, y: 400, width: 200, height: 150 });
+  await doc.embedJpg(JPG);
+
+  const form = doc.getForm();
+  const name = form.createTextField('Name');
+  name.setText('Ada');
+  name.addToPage(page1, { x: 48, y: 240, width: 180, height: 22, borderWidth: 0 });
+  const agree = form.createCheckBox('Agree');
+  agree.check();
+  agree.addToPage(page1, { x: 48, y: 200, width: 16, height: 16, borderWidth: 1 });
+  const signature = form.createTextField('Signature');
+  signature.addToPage(page2, { x: 48, y: 200, width: 180, height: 40, borderWidth: 0 });
+  signature.acroField.dict.set(PDFName.of('FT'), PDFName.of('Sig'));
+
+  const ctx = doc.context;
+  const outlinesRef = ctx.nextRef();
+  const outlines = ctx.obj({ Type: 'Outlines' });
+  ctx.assign(outlinesRef, outlines);
+  doc.catalog.set(PDFName.of('Outlines'), outlinesRef);
+  const items = [
+    { title: 'Alpha', page: page1.ref },
+    { title: 'Beta', page: page2.ref },
+  ];
+  const refs = items.map(() => ctx.nextRef());
+  items.forEach((item, index) => {
+    const dict = ctx.obj({
+      Title: PDFHexString.fromText(item.title),
+      Parent: outlinesRef,
+      Dest: [item.page, PDFName.of('Fit')],
+    });
+    if (index > 0) dict.set(PDFName.of('Prev'), refs[index - 1]!);
+    if (index < items.length - 1) dict.set(PDFName.of('Next'), refs[index + 1]!);
+    ctx.assign(refs[index]!, dict);
+  });
+  outlines.set(PDFName.of('First'), refs[0]!);
+  outlines.set(PDFName.of('Last'), refs[1]!);
+  outlines.set(PDFName.of('Count'), PDFNumber.of(items.length));
+
+  const link = ctx.register(
+    ctx.obj({
+      Type: 'Annot',
+      Subtype: 'Link',
+      Rect: [48, 620, 180, 660],
+      Border: [0, 0, 0],
+      A: { Type: 'Action', S: 'URI', URI: PDFString.of('https://example.com/lease') },
+    }),
+  );
+  const annots = page1.node.Annots() ?? ctx.obj([]);
+  if (!page1.node.Annots()) page1.node.set(PDFName.of('Annots'), annots);
+  annots.push(link);
+  return doc.save({ useObjectStreams: false, updateFieldAppearances: false });
+}
+
+test('pdf compress keeps text, pages, outline, and form fields', async () => {
+  assert.equal(COMPRESS_RASTERIZES_PAGES, false);
+  const src = await structuredPdf();
+  const before = await readPdfStructure(src);
+  assert.equal(before.pageCount, 2);
+  assert.match(before.text, /Alpha page/);
+  assert.match(before.text, /Beta page/);
+  assert.deepEqual(before.outline, ['Alpha', 'Beta']);
+  assert.deepEqual(
+    before.fields.map((field) => field.name),
+    ['Name', 'Agree', 'Signature'],
+  );
+  assert.equal(before.fields[0]!.value, 'Ada');
+  assert.equal(before.fields[1]!.value, 'Yes');
+  assert.deepEqual(before.signatures, ['Signature']);
+  assert.deepEqual(before.links, ['https://example.com/lease']);
+  assert.equal(before.metadata.title, 'Lease');
+  assert.equal(before.metadata.author, 'Ada Lovelace');
+
+  const plain = await compressPdfBytes(src);
+  assert.deepEqual(await readPdfStructure(plain.bytes), before);
+  assert.ok(plain.bytes.length < src.length);
+
+  const shrunk = await shrinkPdfImages(src, async () => ({ bytes: SMALL, width: 200, height: 150 }));
+  assert.equal(shrunk.shrunk, true);
+  assert.deepEqual(await readPdfStructure(shrunk.bytes), before);
+
+  let calls = 0;
+  const fitted = await compressPdfToTarget(
+    src,
+    30_000,
+    [
+      { dpi: 300, quality: 0.85, maxLongSide: 3300 },
+      { dpi: 150, quality: 0.72, maxLongSide: 1650 },
+    ],
+    async (jpeg, width, height, step) => {
+      calls += 1;
+      if (step.dpi > 200) return { bytes: jpeg, width, height };
+      return { bytes: SMALL, width: 200, height: 150 };
+    },
+  );
+  assert.equal(fitted.action, 'compress');
+  assert.equal(fitted.rasterized, false);
+  assert.equal(fitted.structure, 'kept');
+  assert.equal(fitted.unmet, false);
+  assert.ok(fitted.after <= 30_000, String(fitted.after));
+  assert.equal(calls, 6);
+  assert.match(fitted.message, /text is unchanged/);
+  assert.deepEqual(await readPdfStructure(fitted.bytes), before);
+
+  const stuck = await compressPdfToTarget(src, 500, [{ dpi: 72, quality: 0.4, maxLongSide: 792 }], async () => ({
+    bytes: SMALL,
+    width: 200,
+    height: 150,
+  }));
+  assert.equal(stuck.action, 'smallest');
+  assert.equal(stuck.unmet, true);
+  assert.equal(stuck.rasterized, false);
+  assert.ok(stuck.after > 500);
+  assert.ok(stuck.after < src.length);
+  assert.match(stuck.message, /Smallest is/);
+  assert.match(stuck.message, /text is unchanged/);
+  assert.deepEqual(await readPdfStructure(stuck.bytes), before);
+
+  const quiet = await labeled(1);
+  const left = await compressPdfToTarget(quiet, 5 * 1024 * 1024, [], async () => {
+    throw new Error('measure');
+  });
+  assert.equal(left.action, 'noop');
+  assert.equal(left.bytes, quiet);
+  assert.deepEqual(await readPdfStructure(left.bytes), await readPdfStructure(quiet));
+
+  const stripped = await compressPdfToTarget(
+    src,
+    30_000,
+    [{ dpi: 72, quality: 0.4, maxLongSide: 792 }],
+    async () => ({ bytes: SMALL, width: 200, height: 150 }),
+    { stripPrivacy: true },
+  );
+  const privateView = await readPdfStructure(stripped.bytes);
+  assert.equal(privateView.metadata.author, '');
+  assert.equal(privateView.metadata.keywords, '');
+  assert.equal(privateView.metadata.title, 'Lease');
+  assert.equal(privateView.text, before.text);
+  assert.deepEqual(privateView.outline, before.outline);
+  assert.deepEqual(privateView.fields, before.fields);
+  assert.deepEqual(privateView.pages, before.pages);
+  assert.equal(privateView.pageCount, before.pageCount);
+
+  await assert.rejects(compressPdfToTarget(new Uint8Array(), 100, [], async () => null), /empty/);
+  await assert.rejects(compressPdfToTarget(src, 0, [], async () => null), /target size/);
 });

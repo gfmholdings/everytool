@@ -245,6 +245,8 @@ test('pdf target size: chips match Resize, and the loop stops at the first reada
     },
   });
   assert.equal(already.action, 'noop');
+  assert.equal(already.rasterized, false);
+  assert.equal(already.structure, 'kept');
   assert.equal(already.after, 240 * 1024);
   assert.equal(already.text, 'kept');
   assert.match(already.message, /Already 240 KB, under 1 MB/);
@@ -266,6 +268,7 @@ test('pdf target size: chips match Resize, and the loop stops at the first reada
   });
   assert.equal(calls, 6);
   assert.equal(fitted.action, 'compress');
+  assert.equal(fitted.rasterized, false);
   assert.equal(fitted.dpi, 150);
   assert.equal(fitted.quality, 0.72);
   assert.equal(fitted.maxLongSide, 1650);
@@ -285,6 +288,8 @@ test('pdf target size: chips match Resize, and the loop stops at the first reada
   });
   assert.equal(all, steps.length);
   assert.equal(stuck.action, 'smallest');
+  assert.equal(stuck.rasterized, false);
+  assert.equal(stuck.structure, 'kept');
   assert.equal(stuck.unmet, true);
   assert.equal(stuck.dpi, 72);
   assert.equal(stuck.quality, 0.4);

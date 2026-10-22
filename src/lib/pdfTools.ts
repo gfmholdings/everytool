@@ -533,6 +533,9 @@ export interface PdfTargetPlan {
   message: string;
   /** Embedded photos change. Text, fonts, and vector drawing do not. */
   text: 'kept';
+  /** Pages are never drawn into images or sent through a print renderer. */
+  rasterized: false;
+  structure: 'kept';
 }
 
 /** Steps the phone tries, in order, until the file is under the chip. */
@@ -569,6 +572,7 @@ function formatBytes(bytes: number): string {
  * Lower JPEG quality, then DPI 300 → 150 → 100 → 72, until `measure`
  * reports a file under `maxBytes`. `measure` is the on-device re-encode
  * of embedded photos only. Text is never part of the attempt.
+ * Pages are not rasterized and the file is not printed to a new PDF.
  * A file already at or under the chip is returned unchanged.
  * When the floor is still over the chip, the smallest try is offered.
  */
@@ -598,6 +602,8 @@ export function planPdfTarget(input: {
       unmet: false,
       message,
       text: 'kept',
+      rasterized: false,
+      structure: 'kept',
     };
   }
   let chosen: PdfTargetPlan | null = null;
@@ -618,6 +624,8 @@ export function planPdfTarget(input: {
         unmet: false,
         message: `${formatBytes(before)} is now ${formatBytes(bytes)}. The text is unchanged.`,
         text: 'kept',
+      rasterized: false,
+      structure: 'kept',
       };
       break;
     }
@@ -636,6 +644,8 @@ export function planPdfTarget(input: {
     unmet: true,
     message: `Cannot get under ${limit} without making the photos hard to read. Smallest is ${formatBytes(after)}. The text is unchanged.`,
     text: 'kept',
+    rasterized: false,
+    structure: 'kept',
   };
 }
 
