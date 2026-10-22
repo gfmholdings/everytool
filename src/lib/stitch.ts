@@ -14,6 +14,7 @@ import {
   type ColumnRepair,
   type FrameFeatures,
   type OverlayStamp,
+  type OverlapGap,
   type Redaction,
   type Segment,
 } from './stitchCore';
@@ -41,6 +42,8 @@ export interface StitchResult {
   bytes: number;
   /** Seams with no credible overlap — stacked whole, in order. */
   stackedSeams: number;
+  /** 1-based pairs that were stacked because the overlap was not trusted. */
+  gaps: OverlapGap[];
   /** Kept for API compatibility: true when any seam was stacked. */
   stacked: boolean;
   duplicates: number;
@@ -79,8 +82,10 @@ async function isPngAtWidth(uri: string, width: number): Promise<{ width: number
 
 /**
  * Bring every input to one width as PNG. Frames from Everytool's own
- * screen recording already are (≤1170 px PNG), and are used in place;
+ * screen recording already are (≤1320 px PNG), and are used in place;
  * picked photos (HEIC/JPEG, any size) are re-encoded by the platform.
+ * A resize, when one is required, uses an integer height so the cut
+ * stays on whole rows.
  */
 async function normalize(
   inputs: ShotInput[],
@@ -103,7 +108,8 @@ async function normalize(
     if (asIs) {
       out.push({ uri: s.uri, width: asIs.width, height: asIs.height });
     } else {
-      const r = await manipulateAsync(s.uri, [{ resize: { width } }], {
+      const height = Math.max(1, Math.round((s.height * width) / s.width));
+      const r = await manipulateAsync(s.uri, [{ resize: { width, height } }], {
         format: SaveFormat.PNG,
       });
       out.push({ uri: r.uri, width: r.width, height: r.height });
@@ -252,6 +258,7 @@ export async function stitchFrames(
     height: analysis.height,
     bytes: sink.bytes,
     stackedSeams: analysis.stackedSeams,
+    gaps: analysis.gaps,
     stacked: analysis.stackedSeams > 0,
     duplicates: analysis.duplicates,
     trimmed: analysis.trimmed,

@@ -6,9 +6,11 @@ import {
   analyzeFrames,
   emitSegments,
   FeatureBuilder,
+  overlapWarning,
   PixelateSink,
   type FrameFeatures,
 } from '../src/lib/stitchCore.ts';
+import { previewSpan } from '../src/lib/stitchMath.ts';
 
 // ---------------------------------------------------------------------------
 // A synthetic phone screen: W wide, H tall, showing a long page scrolled to
@@ -317,6 +319,58 @@ test('stitch: a jump with no overlap is stacked and reported', () => {
   const analysis = analyzeFrames(imgs.map((m) => features(m)), { mode: 'photos' });
   assert.equal(analysis.stackedSeams, 1);
   assert.equal(analysis.used.length, 4);
+  assert.deepEqual(analysis.gaps, [{ first: 2, second: 3 }]);
+  assert.equal(overlapWarning(2, 3), 'Screenshots 2 and 3 don’t overlap — retake with a bit less scroll');
+});
+
+test('stitch: overlapping shots name no gap', async () => {
+  const scrolls = [0, 175, 410, 680];
+  const imgs = scrolls.map((s, i) => screen(s, i));
+  const analysis = analyzeFrames(imgs.map((m) => features(m)), { mode: 'photos' });
+  assert.equal(analysis.stackedSeams, 0);
+  assert.deepEqual(analysis.gaps, []);
+  const out = await compose(imgs, analysis);
+  const last = scrolls[scrolls.length - 1]!;
+  let seamY = 0;
+  let seams = 0;
+  for (let i = 0; i < analysis.segments.length - 1; i += 1) {
+    const cur = analysis.segments[i]!;
+    const next = analysis.segments[i + 1]!;
+    seamY += cur.to - cur.from;
+    if (next.frame === cur.frame) continue;
+    seams += 1;
+    const py = seamY - CONTENT_TOP;
+    assert.ok(py > 0 && py < last + CONTENT_H, `seam ${seamY} is outside the page`);
+    assert.equal(cur.to, Math.floor(cur.to));
+    assert.equal(next.from, Math.floor(next.from));
+    assert.ok(pageRowsMatch(out, seamY - 1, py - 1), `row above seam ${seamY} is not the previous page row`);
+    assert.ok(pageRowsMatch(out, seamY, py), `row at seam ${seamY} is not the next page row`);
+    // A duplicated or blank inserted row would make this the same page row twice.
+    if (!pageRowsMatch(out, seamY - 1, py)) {
+      assert.equal(pageRowsMatch(out, seamY, py - 1), false, `seam ${seamY} repeats the previous row`);
+    }
+  }
+  assert.ok(seams >= 1, 'expected at least one join');
+  assert.equal(
+    analysis.segments.reduce((n, s) => n + (s.to - s.from), 0),
+    analysis.height,
+  );
+});
+
+test('preview span: integer cuts add no row', () => {
+  assert.equal(previewSpan(0, 180, 1), 180);
+  assert.equal(previewSpan(40, 40, 0.4), 0);
+  const scale = 350 / 1179;
+  let y = 0;
+  const cuts = [0, 180, 400, 401, 900];
+  for (let i = 0; i < cuts.length - 1; i += 1) {
+    const h = previewSpan(cuts[i]!, cuts[i + 1]!, scale);
+    assert.equal(h, Math.round(cuts[i + 1]! * scale) - Math.round(cuts[i]! * scale));
+    assert.equal(Number.isInteger(h), true);
+    assert.ok(h >= 0);
+    y += h;
+  }
+  assert.equal(y, Math.round(900 * scale) - Math.round(0));
 });
 
 test('stitch: picked screenshots of different heights still join', () => {

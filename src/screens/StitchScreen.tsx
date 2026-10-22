@@ -38,7 +38,8 @@ import {
   type StitchPhase,
   type StitchResult,
 } from '../lib/stitch';
-import type { ColumnRepair, OverlayStamp, Segment } from '../lib/stitchCore';
+import { overlapWarning, type ColumnRepair, type OverlayStamp, type Segment } from '../lib/stitchCore';
+import { previewSpan } from '../lib/stitchMath';
 import {
   requestNotificationPermission,
   sharedVaultAvailable,
@@ -128,9 +129,12 @@ export function StitchScreen({
         });
         commitResult(out);
         setResultFrom(from);
-        if (out.stackedSeams > 0) {
+        if (out.gaps.length === 1) {
+          const g = out.gaps[0]!;
+          notify(overlapWarning(g.first, g.second));
+        } else if (out.gaps.length > 1) {
           notify(
-            `Stitched — ${out.stackedSeams} spot${out.stackedSeams === 1 ? '' : 's'} didn’t overlap and ${out.stackedSeams === 1 ? 'was' : 'were'} stacked.`,
+            `${out.gaps.length} joins don’t overlap — retake those with a bit less scroll`,
           );
         }
         return out;
@@ -435,18 +439,20 @@ export function StitchScreen({
             <Text style={type.h2}>Screenshot as you scroll</Text>
             <Text style={[type.body, styles.spaced]}>
               1. Tap Start.{'\n'}
-              2. In any app, take a screenshot (side button + volume up),
-              scroll down a little, take another — as many as you like.
-              Keep a bit of overlap between them.{'\n'}
+              2. In any app, take a screenshot (side button + volume up).
+              Scroll a bit less than a full screen, so part of the last
+              shot is still showing, then take another — as many as you
+              like.{'\n'}
               3. Come back and tap Stitch. Everytool joins every screenshot
               taken since Start into one long image.
             </Text>
             <Text style={[type.small, styles.spaced]}>
-              Tip: Settings → Accessibility → Touch → Back Tap → Double Tap,
-              then choose Screenshot. iOS saves each screenshot to Photos
-              automatically. Come back and tap Stitch. You can also add
-              “Start Long Screenshot” and “Stitch Screenshots” to Control
-              Center.
+              Tip: Scroll a bit less than a full screen each time, so part of
+              the last shot is still showing. Settings → Accessibility →
+              Touch → Back Tap → Double Tap, then choose Screenshot. iOS
+              saves each shot to Photos automatically. Come back and tap
+              Stitch. You can also add “Start Long Screenshot” and “Stitch
+              Screenshots” to Control Center.
             </Text>
           </Card>
           {sessionAt ? (
@@ -578,8 +584,9 @@ export function StitchScreen({
             />
           )}
           <Text style={type.small}>
-            Pick screenshots top to bottom that overlap a little. Fixed bars
-            (status, navigation, tab bar) are kept once. Use ‹ › to reorder.
+            Scroll a bit less than a full screen between shots, so part of
+            the last one is still showing. Fixed bars (status, navigation,
+            tab bar) are kept once. Use ‹ › to reorder.
           </Text>
         </>
       )}
@@ -603,10 +610,14 @@ export function StitchScreen({
                 {result.trimmed > 0 ? `${result.trimmed} frames at the start/end left out.` : ''}
               </Text>
             )}
-            {result.stackedSeams > 0 && (
-              <Text style={[type.small, styles.center]}>
-                {result.stackedSeams} spot{result.stackedSeams === 1 ? '' : 's'} didn’t
-                overlap (scrolled too fast) and {result.stackedSeams === 1 ? 'was' : 'were'} stacked in order.
+            {result.gaps.slice(0, 6).map((g) => (
+              <Text key={`${g.first}-${g.second}`} style={styles.warning}>
+                {overlapWarning(g.first, g.second)}
+              </Text>
+            ))}
+            {result.gaps.length > 6 && (
+              <Text style={styles.warning}>
+                And {result.gaps.length - 6} more — retake those with a bit less scroll.
               </Text>
             )}
             <GhostButton label="View full length" onPress={() => setViewer(true)} />
@@ -663,16 +674,20 @@ function SegmentView({
   stamps: OverlayStamp[];
 }) {
   const segH = seg.to - seg.from;
+  const viewH = previewSpan(seg.from, seg.to, scale);
   const localRepairs = repairs.filter((r) => r.outY1 > outY && r.outY0 < outY + segH);
   const localStamps = stamps.filter((s) => s.outY + s.height > outY && s.outY < outY + segH);
+  if (viewH <= 0) return null;
+  const px = (n: number) => Math.round(n * scale);
   return (
-    <View style={{ height: segH * scale, overflow: 'hidden' }}>
+    <View style={{ height: viewH, overflow: 'hidden' }}>
       <Image
         source={{ uri: frame.uri }}
+        resizeMode="stretch"
         style={{
-          width: frame.width * scale,
-          height: frame.height * scale,
-          marginTop: -seg.from * scale,
+          width: px(frame.width),
+          height: px(frame.height),
+          marginTop: -px(seg.from),
         }}
       />
       {localRepairs.map((r, i) => {
@@ -687,20 +702,21 @@ function SegmentView({
             pointerEvents="none"
             style={{
               position: 'absolute',
-              left: r.x0 * scale,
-              top: (visTop - outY) * scale,
-              width: (r.x1 - r.x0) * scale,
-              height: (visBot - visTop) * scale,
+              left: px(r.x0),
+              top: px(seg.from + (visTop - outY)) - px(seg.from),
+              width: Math.max(1, px(r.x1) - px(r.x0)),
+              height: Math.max(1, px(srcTop + (visBot - visTop)) - px(srcTop)),
               overflow: 'hidden',
             }}
           >
             <Image
               source={{ uri: donor.uri }}
+              resizeMode="stretch"
               style={{
-                width: donor.width * scale,
-                height: donor.height * scale,
-                marginTop: -srcTop * scale,
-                marginLeft: -r.x0 * scale,
+                width: px(donor.width),
+                height: px(donor.height),
+                marginTop: -px(srcTop),
+                marginLeft: -px(r.x0),
               }}
             />
           </View>
@@ -718,20 +734,21 @@ function SegmentView({
             pointerEvents="none"
             style={{
               position: 'absolute',
-              left: s.outX * scale,
-              top: (visTop - outY) * scale,
-              width: s.width * scale,
-              height: (visBot - visTop) * scale,
+              left: px(s.outX),
+              top: px(seg.from + (visTop - outY)) - px(seg.from),
+              width: Math.max(1, px(s.outX + s.width) - px(s.outX)),
+              height: Math.max(1, px(srcTop + (visBot - visTop)) - px(srcTop)),
               overflow: 'hidden',
             }}
           >
             <Image
               source={{ uri: src.uri }}
+              resizeMode="stretch"
               style={{
-                width: src.width * scale,
-                height: src.height * scale,
-                marginTop: -srcTop * scale,
-                marginLeft: -s.srcX * scale,
+                width: px(src.width),
+                height: px(src.height),
+                marginTop: -px(srcTop),
+                marginLeft: -px(s.srcX),
               }}
             />
           </View>
@@ -750,7 +767,7 @@ function SegmentsPreview({ result, maxHeight }: { result: StitchResult; maxHeigh
     let outY = 0;
     for (const seg of result.segments) {
       if (h < maxHeight && scale !== 0) out.push({ seg, outY });
-      h += (seg.to - seg.from) * scale;
+      h += previewSpan(seg.from, seg.to, scale);
       outY += seg.to - seg.from;
     }
     return out;
@@ -824,7 +841,7 @@ function FullLengthViewer({
     let at = 0;
     for (const s of result.segments) {
       out.push(at);
-      at += (s.to - s.from) * scale;
+      at += previewSpan(s.from, s.to, scale);
     }
     return out;
   }, [result, scale]);
@@ -908,12 +925,16 @@ function FullLengthViewer({
               )}
               getItemLayout={(_, index) => {
                 const s = result.segments[index]!;
-                return { length: (s.to - s.from) * scale, offset: offsets[index] ?? 0, index };
+                return {
+                  length: previewSpan(s.from, s.to, scale),
+                  offset: offsets[index] ?? 0,
+                  index,
+                };
               }}
               windowSize={5}
               initialNumToRender={4}
               maxToRenderPerBatch={3}
-              removeClippedSubviews
+              removeClippedSubviews={false}
             />
           )}
           <View
@@ -1005,8 +1026,9 @@ const styles = StyleSheet.create({
   thumbBtn: { fontSize: 18, fontWeight: '700', color: colors.accent, paddingHorizontal: 4 },
   progress: { textAlign: 'center' },
   resultCard: { alignItems: 'stretch', gap: 10 },
-  preview: { width: '100%', overflow: 'hidden', borderRadius: 10, backgroundColor: colors.border },
+  preview: { width: '100%', overflow: 'hidden', borderRadius: 10, backgroundColor: colors.card },
   center: { textAlign: 'center' },
+  warning: { color: colors.orange, fontSize: 15, textAlign: 'center' },
   error: { color: colors.danger, fontSize: 15 },
   viewer: { flex: 1, backgroundColor: '#000' },
   viewerBar: {

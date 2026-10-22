@@ -355,6 +355,18 @@ export function findScroll(
   return best;
 }
 
+export interface OverlapGap {
+  /** 1-based index of the earlier shot in the input. */
+  first: number;
+  /** 1-based index of the later shot. */
+  second: number;
+}
+
+/** Shown when two shots were stacked because they don't share rows. */
+export function overlapWarning(first: number, second: number): string {
+  return `Screenshots ${first} and ${second} don’t overlap — retake with a bit less scroll`;
+}
+
 export interface Segment {
   /** Index into the ORIGINAL frames array. */
   frame: number;
@@ -375,6 +387,10 @@ export interface StitchAnalysis {
   trimmed: number;
   /** Seams with no credible overlap — stacked whole, in order. */
   stackedSeams: number;
+  /** Consecutive input shots (1-based) whose overlap was not trusted.
+   *  They are still stacked, so the image can be saved, and the UI
+   *  names each pair. */
+  gaps: OverlapGap[];
   header: number;
   footer: number;
   /** Column ranges copied from another frame so a static overlay does not
@@ -895,6 +911,7 @@ export function analyzeFrames(
       duplicates: 0,
       trimmed: 0,
       stackedSeams: 0,
+      gaps: [],
       header: 0,
       footer: 0,
       repairs: [],
@@ -964,6 +981,7 @@ export function analyzeFrames(
     else segments.push({ frame, from, to });
   };
   let stackedSeams = 0;
+  const gaps: OverlapGap[] = [];
   const used: number[] = [];
   const single = idx.length === 1;
   const first = frames[idx[0]!]!;
@@ -978,6 +996,9 @@ export function analyzeFrames(
     const bBot = Math.max(bTop + 1, b.height - footer);
     const m = seams[i - 1]!.match;
     if (m) {
+      // d is a whole number of rows. The new slice starts on the first
+      // row the previous frame did not already include — no duplicated
+      // row, no skipped row, no fractional sample at the cut.
       const from = bTop + (aBot - aTop) - m.d;
       if (from < bBot) {
         push(idx[i]!, Math.max(bTop, from), bBot);
@@ -985,6 +1006,7 @@ export function analyzeFrames(
       }
     } else {
       stackedSeams += 1;
+      gaps.push({ first: idx[i - 1]! + 1, second: idx[i]! + 1 });
       push(idx[i]!, bTop, bBot);
       used.push(idx[i]!);
     }
@@ -1006,6 +1028,7 @@ export function analyzeFrames(
     duplicates,
     trimmed,
     stackedSeams,
+    gaps,
     header,
     footer,
     repairs: fix.repairs,
