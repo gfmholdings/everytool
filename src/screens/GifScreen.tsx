@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 
 import { Card, PrimaryButton, Segmented, ToolShell } from '../components/ui';
+import { useUndoHistory } from '../hooks/useUndoHistory';
 import { formatBytes, saveToPhotos, shareFile } from '../lib/files';
 import { makeGifFromVideo, type GifResult } from '../lib/gif';
 import {
@@ -19,7 +20,16 @@ import {
   formatGifTime,
   planGif,
 } from '../lib/gifenc';
-import { colors, type } from '../theme';
+import type { Palette } from '../theme';
+import { useThemed } from '../useTheme';
+
+type GifAdjust = {
+  start: number;
+  length: number;
+  fps: string;
+  width: string;
+  colour: 'best' | 'fast';
+};
 
 /**
  * Video to GIF. A playable preview loops the selected stretch. The
@@ -33,6 +43,7 @@ export function GifScreen({
   onBack: () => void;
   notify: (msg: string) => void;
 }) {
+  const { type, styles } = useThemed(makeStyles);
   const [video, setVideo] = useState<{
     uri: string;
     durationMs: number;
@@ -40,13 +51,16 @@ export function GifScreen({
     height: number;
   } | null>(null);
   const [result, setResult] = useState<GifResult | null>(null);
-  const [start, setStart] = useState(0);
-  const [length, setLength] = useState(5);
+  const adjust = useUndoHistory<GifAdjust>(
+    { start: 0, length: 5, fps: '10', width: '360', colour: 'best' },
+    { shake: true },
+  );
+  const { start, length, fps, width, colour } = adjust.present;
+  const setTrim = (startSec: number, lengthSec: number, group = false) => {
+    adjust.commit((current) => ({ ...current, start: startSec, length: lengthSec }), group);
+  };
   const [playhead, setPlayhead] = useState(0);
   const [seek, setSeek] = useState<{ id: number; t: number } | null>(null);
-  const [fps, setFps] = useState('10');
-  const [width, setWidth] = useState('360');
-  const [colour, setColour] = useState<'best' | 'fast'>('best');
   const [thumbs, setThumbs] = useState<string[]>([]);
   const [progress, setProgress] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -125,8 +139,7 @@ export function GifScreen({
       width: a.width ?? 0,
       height: a.height ?? 0,
     });
-    setStart(range.startSec);
-    setLength(range.lengthSec);
+    setTrim(range.startSec, range.lengthSec);
     setPlayhead(range.startSec);
     setSeek(null);
     setError(null);
@@ -151,8 +164,7 @@ export function GifScreen({
       anchor,
     });
     forgetResult();
-    setStart(range.startSec);
-    setLength(range.lengthSec);
+    setTrim(range.startSec, range.lengthSec, true);
     requestSeek(Math.min(range.endSec, Math.max(range.startSec, nextPlay)));
   };
 
@@ -164,8 +176,7 @@ export function GifScreen({
       anchor: 'window',
     });
     forgetResult();
-    setStart(range.startSec);
-    setLength(range.lengthSec);
+    setTrim(range.startSec, range.lengthSec);
     setPlayhead((p) => Math.min(range.endSec, Math.max(range.startSec, p)));
   };
 
@@ -177,8 +188,7 @@ export function GifScreen({
       anchor: 'start',
     });
     forgetResult();
-    setStart(range.startSec);
-    setLength(range.lengthSec);
+    setTrim(range.startSec, range.lengthSec);
     setPlayhead((p) => Math.min(range.endSec, Math.max(range.startSec, p)));
   };
 
@@ -245,7 +255,16 @@ export function GifScreen({
   const still = thumbs[thumbAt] || thumbs.find((uri) => uri.length > 0) || null;
 
   return (
-    <ToolShell title="Video to GIF" onBack={onBack}>
+    <ToolShell
+      title="Video to GIF"
+      onBack={onBack}
+      undo={{
+        canUndo: adjust.canUndo,
+        canRedo: adjust.canRedo,
+        onUndo: () => adjust.undo(),
+        onRedo: () => adjust.redo(),
+      }}
+    >
       <Text style={type.small}>
         Drag the handles to choose up to 10 seconds. The preview loops that
         stretch. “Best colour” builds a palette from your clip.
@@ -279,8 +298,7 @@ export function GifScreen({
               });
               if (range.startSec === start && range.lengthSec === length) return;
               forgetResult();
-              setStart(range.startSec);
-              setLength(range.lengthSec);
+              setTrim(range.startSec, range.lengthSec);
             }}
           />
           <View style={styles.timeRow}>
@@ -313,7 +331,7 @@ export function GifScreen({
             value={fps}
             onChange={(next) => {
               forgetResult();
-              setFps(next);
+              adjust.commit((current) => ({ ...current, fps: next }));
             }}
           />
           <Text style={type.label}>Size</Text>
@@ -326,7 +344,7 @@ export function GifScreen({
             value={width}
             onChange={(next) => {
               forgetResult();
-              setWidth(next);
+              adjust.commit((current) => ({ ...current, width: next }));
             }}
           />
           <Segmented
@@ -337,7 +355,7 @@ export function GifScreen({
             value={colour}
             onChange={(next) => {
               forgetResult();
-              setColour(next);
+              adjust.commit((current) => ({ ...current, colour: next }));
             }}
           />
         </>
@@ -347,7 +365,6 @@ export function GifScreen({
           label={busy ? 'Making GIF…' : 'Make GIF'}
           onPress={run}
           disabled={busy}
-          orange
         />
       )}
       {!!progress && <Text style={type.small}>{progress}</Text>}
@@ -444,6 +461,7 @@ function RangePlayer({
   onDuration: (seconds: number) => void;
   onFail: () => void;
 }) {
+  const { styles } = useThemed(makeStyles);
   const player = mod.useVideoPlayer(uri, (created) => {
     created.loop = false;
     created.timeUpdateEventInterval = 0.05;
@@ -534,6 +552,7 @@ function RangePlayer({
 }
 
 function StillPreview({ uri }: { uri: string | null }) {
+  const { styles } = useThemed(makeStyles);
   return (
     <View style={styles.preview}>
       {uri ? <Image source={{ uri }} style={styles.previewVideo} resizeMode="contain" /> : null}
@@ -576,6 +595,7 @@ function TrimBar({
     anchor: 'start' | 'end' | 'window' | 'play',
   ) => void;
 }) {
+  const { styles } = useThemed(makeStyles);
   const [width, setWidth] = useState(1);
   const live = useRef({ duration, start, end, playhead, width, onChange });
   const drag = useRef<{
@@ -695,6 +715,7 @@ function Stepper({
   value: number;
   onChange: (v: number) => void;
 }) {
+  const { type, styles } = useThemed(makeStyles);
   const shown = (Math.round(value * 10) / 10).toFixed(1);
   const step = (dir: number) => onChange(Math.round((value + dir * 0.1) * 10) / 10);
   return (
@@ -713,85 +734,87 @@ function Stepper({
   );
 }
 
-const styles = StyleSheet.create({
-  preview: {
-    height: 240,
-    borderRadius: 12,
-    overflow: 'hidden',
-    backgroundColor: '#000000',
-  },
-  previewHit: { flex: 1 },
-  previewVideo: { width: '100%', height: '100%' },
-  playBadge: {
-    position: 'absolute',
-    top: 100,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-  },
-  playBadgeText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '700',
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 16,
-    overflow: 'hidden',
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-  },
-  timeRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  trim: {
-    height: 64,
-    borderRadius: 10,
-    overflow: 'hidden',
-    backgroundColor: '#1C1C1E',
-  },
-  film: { flex: 1, flexDirection: 'row' },
-  thumb: { flex: 1, height: 64, backgroundColor: '#2C2C2E' },
-  dim: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-  },
-  selection: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    borderTopWidth: 3,
-    borderBottomWidth: 3,
-    borderColor: '#FFFFFF',
-  },
-  handle: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    width: 16,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  grip: { width: 2, height: 22, borderRadius: 1, backgroundColor: '#1C1C1E' },
-  playhead: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    width: 2,
-    backgroundColor: '#FFFFFF',
-  },
-  stepper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: colors.card,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  stepperControls: { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  stepBtn: { fontSize: 26, fontWeight: '700', color: colors.accent, paddingHorizontal: 6 },
-  resultCard: { gap: 12, alignItems: 'stretch' },
-  gif: { width: '100%', height: 240, borderRadius: 10, backgroundColor: '#000000' },
-  center: { textAlign: 'center' },
-  error: { color: colors.danger, fontSize: 15 },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    preview: {
+      height: 240,
+      borderRadius: 12,
+      overflow: 'hidden',
+      backgroundColor: p.media,
+    },
+    previewHit: { flex: 1 },
+    previewVideo: { width: '100%', height: '100%' },
+    playBadge: {
+      position: 'absolute',
+      top: 100,
+      left: 0,
+      right: 0,
+      alignItems: 'center',
+    },
+    playBadgeText: {
+      color: p.onMedia,
+      fontSize: 15,
+      fontWeight: '700',
+      backgroundColor: p.scrim,
+      borderRadius: 16,
+      overflow: 'hidden',
+      paddingHorizontal: 14,
+      paddingVertical: 6,
+    },
+    timeRow: { flexDirection: 'row', justifyContent: 'space-between' },
+    trim: {
+      height: 64,
+      borderRadius: 10,
+      overflow: 'hidden',
+      backgroundColor: p.mediaRaised,
+    },
+    film: { flex: 1, flexDirection: 'row' },
+    thumb: { flex: 1, height: 64, backgroundColor: p.mediaTrack },
+    dim: {
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      backgroundColor: p.scrim,
+    },
+    selection: {
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      borderTopWidth: 3,
+      borderBottomWidth: 3,
+      borderColor: p.onMedia,
+    },
+    handle: {
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      width: 16,
+      backgroundColor: p.onMedia,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    grip: { width: 2, height: 22, borderRadius: 1, backgroundColor: p.mediaRaised },
+    playhead: {
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      width: 2,
+      backgroundColor: p.onMedia,
+    },
+    stepper: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      backgroundColor: p.surface,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+    },
+    stepperControls: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+    stepBtn: { fontSize: 26, fontWeight: '700', color: p.primary, paddingHorizontal: 6 },
+    resultCard: { gap: 12, alignItems: 'stretch' },
+    gif: { width: '100%', height: 240, borderRadius: 10, backgroundColor: p.media },
+    center: { textAlign: 'center' },
+    error: { color: p.destructive, fontSize: 15 },
+  });
+}

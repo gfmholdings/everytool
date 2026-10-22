@@ -443,9 +443,9 @@ final class LiveTextCoordinator: NSObject, DataScannerViewControllerDelegate {
     guard let view = scanner?.view else { return }
     let use = UIButton(type: .system)
     use.setTitle("Use this text", for: .normal)
-    use.setTitleColor(.white, for: .normal)
+    use.setTitleColor(Palette.onPrimary, for: .normal)
     use.titleLabel?.font = .boldSystemFont(ofSize: 17)
-    use.backgroundColor = UIColor(red: 245 / 255, green: 134 / 255, blue: 31 / 255, alpha: 1)
+    use.backgroundColor = Palette.primary
     use.layer.cornerRadius = 14
     use.frame = CGRect(x: 20, y: view.bounds.height - 96, width: view.bounds.width - 40, height: 50)
     use.autoresizingMask = [.flexibleWidth, .flexibleTopMargin]
@@ -454,7 +454,7 @@ final class LiveTextCoordinator: NSObject, DataScannerViewControllerDelegate {
 
     let cancel = UIButton(type: .system)
     cancel.setTitle("Cancel", for: .normal)
-    cancel.setTitleColor(.white, for: .normal)
+    cancel.setTitleColor(Palette.onMedia, for: .normal)
     cancel.titleLabel?.font = .boldSystemFont(ofSize: 17)
     cancel.frame = CGRect(x: 20, y: view.safeAreaInsets.top + 8, width: 80, height: 36)
     cancel.autoresizingMask = [.flexibleRightMargin, .flexibleBottomMargin]

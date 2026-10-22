@@ -17,6 +17,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Card, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
+import { useUndoHistory } from '../hooks/useUndoHistory';
 import { formatBytes, saveToPhotos, shareFile } from '../lib/files';
 import { clearBroadcastInbox, readBroadcastInbox, type BroadcastInbox } from '../lib/incoming';
 import {
@@ -45,7 +46,10 @@ import {
   sharedVaultAvailable,
   showBroadcastPicker,
 } from '../store/sharedVault';
-import { colors, type } from '../theme';
+import { dark, type Palette } from '../theme';
+import { useThemed } from '../useTheme';
+
+type Notify = (msg: string, action?: { label: string; onPress: () => void }) => void;
 
 type Mode = 'session' | 'record' | 'photos';
 
@@ -81,14 +85,16 @@ export function StitchScreen({
   recordRequest?: number;
   /** A new value asks the screen to stitch the session (from a control). */
   sessionRequest?: number;
-  notify: (msg: string) => void;
+  notify: Notify;
 }) {
+  const { type, styles } = useThemed(makeStyles);
   const [mode, setMode] = useState<Mode>(initialShots?.length ? 'photos' : 'session');
   const [sessionAt, setSessionAt] = useState<number | null>(() => sessionStart());
   const [sessionCount, setSessionCount] = useState(0);
   const [photoAccess, setPhotoAccess] = useState<PhotoAccess | null>(null);
   const [sessionAssets, setSessionAssets] = useState<string[]>([]);
-  const [shots, setShots] = useState<ShotInput[]>(initialShots ?? []);
+  const shotsHist = useUndoHistory<ShotInput[]>(initialShots ?? [], { shake: true });
+  const shots = shotsHist.present;
   const [result, setResult] = useState<StitchResult | null>(null);
   const [resultFrom, setResultFrom] = useState<Mode | null>(null);
   const [busy, setBusy] = useState(false);
@@ -331,13 +337,13 @@ export function StitchScreen({
       width: a.width,
       height: a.height,
     }));
-    setShots((s) => [...s, ...picked]);
+    shotsHist.commit((s) => [...s, ...picked]);
     commitResult(null);
     setError(null);
   };
 
-  const move = (index: number, dir: -1 | 1) =>
-    setShots((all) => {
+  const move = (index: number, dir: -1 | 1) => {
+    shotsHist.commit((all) => {
       const j = index + dir;
       if (j < 0 || j >= all.length) return all;
       const next = [...all];
@@ -345,6 +351,7 @@ export function StitchScreen({
       if (item) next.splice(j, 0, item);
       return next;
     });
+  };
 
   const save = async () => {
     const pending = pendingRender.current;
@@ -422,7 +429,16 @@ export function StitchScreen({
   const recording = inbox.frames.length > 0 && !inbox.finished;
 
   return (
-    <ToolShell title="Long screenshot" onBack={onBack}>
+    <ToolShell
+      title="Long screenshot"
+      onBack={onBack}
+      undo={{
+        canUndo: shotsHist.canUndo,
+        canRedo: shotsHist.canRedo,
+        onUndo: () => shotsHist.undo(),
+        onRedo: () => shotsHist.redo(),
+      }}
+    >
       <Segmented
         options={[
           { id: 'session', label: 'Screenshots' },
@@ -474,7 +490,6 @@ export function StitchScreen({
                   label={busy ? 'Stitching…' : `Stitch ${sessionCount >= 2 ? `${sessionCount} screenshots` : 'screenshots'}`}
                   onPress={() => void finishSession()}
                   disabled={busy}
-                  orange
                   testID="stitch.session.finish"
                 />
                 <GhostButton label="Cancel session" onPress={cancelSession} />
@@ -485,7 +500,6 @@ export function StitchScreen({
               label="Start"
               onPress={() => void beginSession()}
               disabled={busy}
-              orange
               testID="stitch.session.start"
             />
           )}
@@ -512,7 +526,6 @@ export function StitchScreen({
             label={recording ? 'Recording…' : 'Record'}
             onPress={() => void startRecording()}
             disabled={busy || recording}
-            orange
             testID="stitch.record"
           />
           {recording && (
@@ -558,7 +571,10 @@ export function StitchScreen({
                     </Pressable>
                     <Pressable
                       accessibilityLabel="Remove"
-                      onPress={() => setShots((all) => all.filter((_, j) => j !== i))}
+                      onPress={() => {
+                        shotsHist.commit((all) => all.filter((_, j) => j !== i));
+                        notify('Removed', { label: 'Undo', onPress: () => shotsHist.undo() });
+                      }}
                       hitSlop={6}
                     >
                       <Text style={styles.thumbBtn}>✕</Text>
@@ -580,7 +596,6 @@ export function StitchScreen({
               label={busy ? 'Stitching…' : `Stitch ${shots.length} shots`}
               onPress={() => void run(shots, 'photos')}
               disabled={busy}
-              orange
             />
           )}
           <Text style={type.small}>
@@ -646,6 +661,7 @@ export function StitchScreen({
             />
           )}
           <FullLengthViewer
+            key={result.uri}
             result={result}
             visible={viewer}
             onClose={() => setViewer(false)}
@@ -764,6 +780,7 @@ function SegmentView({
 }
 
 function SegmentsPreview({ result, maxHeight }: { result: StitchResult; maxHeight: number }) {
+  const { styles } = useThemed(makeStyles);
   const [width, setWidth] = useState(0);
   const scale = width > 0 ? width / result.width : 0;
   const shown = useMemo(() => {
@@ -802,7 +819,20 @@ function SegmentsPreview({ result, maxHeight }: { result: StitchResult; maxHeigh
 }
 
 /** How a hidden area looks in previews (the saved image is pixelated). */
-function HiddenBox({ r, scale, offset, pending }: { r: Redaction; scale: number; offset: number; pending?: boolean }) {
+function HiddenBox({
+  r,
+  scale,
+  offset,
+  pending,
+  night,
+}: {
+  r: Redaction;
+  scale: number;
+  offset: number;
+  pending?: boolean;
+  night?: boolean;
+}) {
+  const { styles } = useThemed(makeStyles, night ? dark : undefined);
   return (
     <View
       pointerEvents="none"
@@ -833,10 +863,12 @@ function FullLengthViewer({
   onApply: (rects: Redaction[]) => Promise<boolean>;
   busy: boolean;
 }) {
+  const { styles } = useThemed(makeStyles, dark);
   const insets = useSafeAreaInsets();
   const [width, setWidth] = useState(0);
   const [hiding, setHiding] = useState(false);
-  const [rects, setRects] = useState<Redaction[]>(result.redactions);
+  const boxes = useUndoHistory<Redaction[]>(result.redactions);
+  const rects = boxes.present;
   const [draft, setDraft] = useState<Redaction | null>(null);
   const scrollY = useRef(0);
   const [scrollShown, setScrollShown] = useState(0);
@@ -886,7 +918,7 @@ function FullLengthViewer({
   const onRelease = () => {
     setDraft((d) => {
       if (d && d.width * scaleRef.current > 12 && d.height * scaleRef.current > 8) {
-        setRects((all) => [...all, d]);
+        boxes.commit((all) => [...all, d]);
       }
       return null;
     });
@@ -953,16 +985,19 @@ function FullLengthViewer({
             onResponderTerminate={onRelease}
           >
             {rects.map((r, i) => (
-              <HiddenBox key={i} r={r} scale={scale} offset={scrollShown} />
+              <HiddenBox key={i} r={r} scale={scale} offset={scrollShown} night />
             ))}
-            {draft && <HiddenBox r={draft} scale={scale} offset={scrollShown} pending />}
+            {draft && <HiddenBox r={draft} scale={scale} offset={scrollShown} pending night />}
           </View>
         </View>
         <View style={[styles.viewerTools, { paddingBottom: insets.bottom + 8 }]}>
           {hiding ? (
             <>
-              <Pressable onPress={() => setRects((all) => all.slice(0, -1))} hitSlop={8}>
-                <Text style={styles.toolText}>Undo</Text>
+              <Pressable onPress={() => boxes.undo()} disabled={!boxes.canUndo} hitSlop={8}>
+                <Text style={[styles.toolText, !boxes.canUndo && styles.toolOff]}>Undo</Text>
+              </Pressable>
+              <Pressable onPress={() => boxes.redo()} disabled={!boxes.canRedo} hitSlop={8}>
+                <Text style={[styles.toolText, !boxes.canRedo && styles.toolOff]}>Redo</Text>
               </Pressable>
               <Pressable onPress={() => setHiding(false)} hitSlop={8}>
                 <Text style={styles.toolText}>Scroll</Text>
@@ -1009,58 +1044,61 @@ function FullLengthViewer({
   );
 }
 
-const styles = StyleSheet.create({
-  spaced: { marginTop: 10 },
-  rowGap: { marginTop: 10, gap: 4 },
-  thumbs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  thumbWrap: { width: 72, alignItems: 'center', gap: 4 },
-  thumb: { width: 72, height: 108, borderRadius: 10, backgroundColor: colors.border },
-  thumbIndex: {
-    position: 'absolute',
-    top: 4,
-    left: 4,
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 6,
-    paddingHorizontal: 5,
-    overflow: 'hidden',
-  },
-  thumbActions: { flexDirection: 'row', justifyContent: 'space-between', width: '100%' },
-  thumbBtn: { fontSize: 18, fontWeight: '700', color: colors.accent, paddingHorizontal: 4 },
-  progress: { textAlign: 'center' },
-  resultCard: { alignItems: 'stretch', gap: 10 },
-  preview: { width: '100%', overflow: 'hidden', borderRadius: 10, backgroundColor: colors.card },
-  center: { textAlign: 'center' },
-  warning: { color: colors.orange, fontSize: 15, textAlign: 'center' },
-  error: { color: colors.danger, fontSize: 15 },
-  viewer: { flex: 1, backgroundColor: '#000' },
-  viewerBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  viewerTitle: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
-  viewerClose: { color: '#4DA3FF', fontSize: 17, fontWeight: '700' },
-  flex: { flex: 1 },
-  viewerTools: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    backgroundColor: '#111',
-  },
-  toolText: { color: '#FFFFFF', fontSize: 17, fontWeight: '600' },
-  toolPrimary: { color: '#4DA3FF', fontWeight: '800' },
-  toolNote: { color: '#AAA', fontSize: 14 },
-  hidden: {
-    position: 'absolute',
-    backgroundColor: 'rgba(120,120,128,0.92)',
-    borderRadius: 3,
-  },
-  hiddenPending: { backgroundColor: 'rgba(77,163,255,0.35)', borderWidth: 2, borderColor: '#4DA3FF' },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    spaced: { marginTop: 10 },
+    rowGap: { marginTop: 10, gap: 4 },
+    thumbs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    thumbWrap: { width: 72, alignItems: 'center', gap: 4 },
+    thumb: { width: 72, height: 108, borderRadius: 10, backgroundColor: p.mediaTrack },
+    thumbIndex: {
+      position: 'absolute',
+      top: 4,
+      left: 4,
+      fontSize: 12,
+      fontWeight: '800',
+      color: p.onMedia,
+      backgroundColor: p.scrim,
+      borderRadius: 6,
+      paddingHorizontal: 5,
+      overflow: 'hidden',
+    },
+    thumbActions: { flexDirection: 'row', justifyContent: 'space-between', width: '100%' },
+    thumbBtn: { fontSize: 18, fontWeight: '700', color: p.primary, paddingHorizontal: 4 },
+    progress: { textAlign: 'center' },
+    resultCard: { alignItems: 'stretch', gap: 10 },
+    preview: { width: '100%', overflow: 'hidden', borderRadius: 10, backgroundColor: p.surface },
+    center: { textAlign: 'center' },
+    warning: { color: p.warning, fontSize: 15, textAlign: 'center' },
+    error: { color: p.destructive, fontSize: 15 },
+    viewer: { flex: 1, backgroundColor: p.media },
+    viewerBar: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+    },
+    viewerTitle: { color: p.onMedia, fontSize: 15, fontWeight: '600' },
+    viewerClose: { color: p.primary, fontSize: 17, fontWeight: '700' },
+    flex: { flex: 1 },
+    viewerTools: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: 20,
+      paddingTop: 12,
+      backgroundColor: p.mediaRaised,
+    },
+    toolText: { color: p.onMedia, fontSize: 17, fontWeight: '600' },
+    toolPrimary: { color: p.primary, fontWeight: '800' },
+    toolOff: { opacity: 0.35 },
+    toolNote: { color: p.textSecondary, fontSize: 14 },
+    hidden: {
+      position: 'absolute',
+      backgroundColor: p.hideFill,
+      borderRadius: 3,
+    },
+    hiddenPending: { backgroundColor: p.primaryWash, borderWidth: 2, borderColor: p.primary },
+  });
+}

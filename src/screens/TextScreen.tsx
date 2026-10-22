@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { Card, Field, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
+import { useUndoHistory } from '../hooks/useUndoHistory';
 import { shareText } from '../lib/files';
 import {
   cleanUnit,
@@ -24,7 +25,8 @@ import {
   type ExtractKind,
 } from '../lib/text';
 import { useStore } from '../store/AppStore';
-import { colors, type } from '../theme';
+import type { Palette } from '../theme';
+import { useThemed } from '../useTheme';
 
 /**
  * Text tools, operating on pasted text. The same operations power the
@@ -53,9 +55,10 @@ export function TextScreen({
   onBack: () => void;
   notify: (msg: string) => void;
 }) {
+  const { type, styles } = useThemed(makeStyles);
   const { addClip } = useStore();
-  const [text, setText] = useState('');
-  const [undoText, setUndoText] = useState<string | null>(null);
+  const textHist = useUndoHistory('', { shake: true });
+  const text = textHist.present;
   const [unitChoice, setUnitChoice] = useState<CleanUnit | null>(null);
   const [find, setFind] = useState('');
   const [replaceWith, setReplaceWith] = useState('');
@@ -96,8 +99,7 @@ export function TextScreen({
 
   const remember = (next: string) => {
     if (next === text) return false;
-    setUndoText(text);
-    setText(next);
+    textHist.commit(next);
     return true;
   };
 
@@ -125,23 +127,9 @@ export function TextScreen({
     });
   };
 
-  const undo = () => {
-    lightTap();
-    if (undoText === null) return;
-    setText(undoText);
-    setUndoText(null);
-    setPanel({
-      anchor: 'field',
-      kind: 'note',
-      title: 'Undo',
-      message: 'Restored the previous text',
-    });
-  };
-
   const clearAll = () => {
     lightTap();
-    setText('');
-    setUndoText(null);
+    textHist.commit('');
     setUnitChoice(null);
     setFind('');
     setReplaceWith('');
@@ -224,12 +212,28 @@ export function TextScreen({
   };
 
   return (
-    <ToolShell title="Text tools" onBack={onBack}>
+    <ToolShell
+      title="Text tools"
+      onBack={onBack}
+      undo={{
+        canUndo: textHist.canUndo,
+        canRedo: textHist.canRedo,
+        onUndo: () => {
+          textHist.undo();
+          setPanel({
+            anchor: 'field',
+            kind: 'note',
+            title: 'Undo',
+            message: 'Restored the previous text',
+          });
+        },
+        onRedo: () => textHist.redo(),
+      }}
+    >
       <Field
         value={text}
         onChange={(value) => {
-          setText(value);
-          setUndoText(null);
+          textHist.commit(value, true);
           setPanel(null);
         }}
         placeholder="Paste or type text"
@@ -237,7 +241,6 @@ export function TextScreen({
         testID="text.input"
       />
       <GhostButton label="Paste from clipboard" onPress={() => void paste()} />
-      {undoText !== null && <GhostButton label="Undo" onPress={undo} />}
       {panel?.anchor === 'field' && (
         <ResultCard panel={panel} onCopy={copyOut} onShare={shareOut} onUse={useItems} />
       )}
@@ -426,6 +429,7 @@ export function TextScreen({
 }
 
 function Count({ n, label, reading }: { n: number | string; label: string; reading?: boolean }) {
+  const { type, styles } = useThemed(makeStyles);
   return (
     <View style={styles.countCell}>
       <Text
@@ -452,6 +456,7 @@ function ResultCard({
   onShare: (value: string) => void;
   onUse: (items: string[]) => void;
 }) {
+  const { type, styles } = useThemed(makeStyles);
   if (panel.kind === 'note') {
     return (
       <Card style={styles.foundCard}>
@@ -492,14 +497,16 @@ function ResultCard({
   );
 }
 
-const styles = StyleSheet.create({
-  counts: { gap: 14 },
-  countRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  countCell: { alignItems: 'center', flex: 1, gap: 2 },
-  reading: { fontSize: 20 },
-  actionRow: { flexDirection: 'row', gap: 10 },
-  actionHalf: { flex: 1 },
-  foundCard: { gap: 8 },
-  foundItem: { fontSize: 15.5, color: colors.accent, paddingVertical: 2 },
-  footerRow: { flexDirection: 'row', gap: 10 },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    counts: { gap: 14 },
+    countRow: { flexDirection: 'row', justifyContent: 'space-between' },
+    countCell: { alignItems: 'center', flex: 1, gap: 2 },
+    reading: { fontSize: 20 },
+    actionRow: { flexDirection: 'row', gap: 10 },
+    actionHalf: { flex: 1 },
+    foundCard: { gap: 8 },
+    foundItem: { fontSize: 15.5, color: p.primary, paddingVertical: 2 },
+    footerRow: { flexDirection: 'row', gap: 10 },
+  });
+}

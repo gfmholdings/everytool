@@ -16,6 +16,7 @@ import {
 import QRCode from 'react-native-qrcode-svg';
 
 import { Card, Field, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
+import { useUndoHistory } from '../hooks/useUndoHistory';
 import { saveToPhotos, shareFile, tempFileUri } from '../lib/files';
 import { pngFileBase64 } from '../lib/shareSheet';
 import { checkLink } from '../lib/linkCheck';
@@ -38,8 +39,11 @@ import {
 } from '../lib/qrMaker';
 import { describePayload } from '../lib/qrpayload';
 import { useStore } from '../store/AppStore';
-import { colors, type } from '../theme';
+import type { Palette } from '../theme';
+import { useThemed } from '../useTheme';
 import type { QrHistoryItem, QrStyle } from '../types';
+
+type Notify = (msg: string, action?: { label: string; onPress: () => void }) => void;
 
 type Tab = 'make' | 'scan' | 'history';
 
@@ -49,13 +53,16 @@ export function QrScreen({
   initialImage,
 }: {
   onBack: () => void;
-  notify: (msg: string) => void;
+  notify: Notify;
   /** An image shared into Everytool to scan for a QR code. */
   initialImage?: string;
 }) {
-  const { state, addQrHistory, deleteQrHistory, clearQrHistory } = useStore();
+  const { type, styles } = useThemed(makeStyles);
+  const { state, addQrHistory, deleteQrHistory, restoreQrHistory, clearQrHistory } = useStore();
   const [tab, setTab] = useState<Tab>('make');
-  const [fields, setFields] = useState<MakerFields>(() => emptyMaker());
+  const fieldsHist = useUndoHistory<MakerFields>(emptyMaker(), { shake: tab === 'make' });
+  const fields = fieldsHist.present;
+  const removed = useUndoHistory<QrHistoryItem | null>(null, { shake: tab === 'history' });
   const [openId, setOpenId] = useState<string | null>(null);
   const qrRef = useRef<{ toDataURL: (cb: (b64: string) => void) => void } | null>(null);
   const fieldsRef = useRef(fields);
@@ -148,7 +155,7 @@ export function QrScreen({
     if (next === fields.kind) return;
     commitNow();
     lastSavedRef.current = null;
-    setFields(switchMakerKind(fields, next));
+    fieldsHist.commit(switchMakerKind(fields, next));
   };
 
   const make = () => {
@@ -227,8 +234,40 @@ export function QrScreen({
     else void Clipboard.setStringAsync(scanned).then(() => notify('Copied'));
   };
 
+  const undoDelete = () => {
+    const item = removed.present;
+    if (!item) return;
+    removed.undo();
+    restoreQrHistory(item);
+  };
+  const redoDelete = () => {
+    const item = removed.redo();
+    if (!item) return;
+    deleteQrHistory(item.id);
+  };
+
   return (
-    <ToolShell title="QR toolbox" onBack={onBack}>
+    <ToolShell
+      title="QR toolbox"
+      onBack={onBack}
+      undo={
+        tab === 'history'
+          ? {
+              canUndo: removed.canUndo,
+              canRedo: removed.canRedo,
+              onUndo: undoDelete,
+              onRedo: redoDelete,
+            }
+          : tab === 'make'
+            ? {
+                canUndo: fieldsHist.canUndo,
+                canRedo: fieldsHist.canRedo,
+                onUndo: () => fieldsHist.undo(),
+                onRedo: () => fieldsHist.redo(),
+              }
+            : undefined
+      }
+    >
       <Segmented
         options={[
           { id: 'make', label: 'Make' },
@@ -253,7 +292,7 @@ export function QrScreen({
           {fields.kind === 'text' && (
             <Field
               value={fields.text}
-              onChange={(text) => setFields((prev) => ({ ...prev, text }))}
+              onChange={(text) => fieldsHist.commit((prev) => ({ ...prev, text }), true)}
               placeholder="Text or a link"
               multiline
               testID="qr.text"
@@ -263,12 +302,12 @@ export function QrScreen({
             <>
               <Field
                 value={fields.ssid}
-                onChange={(ssid) => setFields((prev) => ({ ...prev, ssid }))}
+                onChange={(ssid) => fieldsHist.commit((prev) => ({ ...prev, ssid }), true)}
                 placeholder="Network name"
               />
               <Field
                 value={fields.password}
-                onChange={(password) => setFields((prev) => ({ ...prev, password }))}
+                onChange={(password) => fieldsHist.commit((prev) => ({ ...prev, password }), true)}
                 placeholder="Password"
                 secure
               />
@@ -279,7 +318,7 @@ export function QrScreen({
                   { id: 'nopass' as MakerSecurity, label: 'Open' },
                 ]}
                 value={fields.security}
-                onChange={(security) => setFields((prev) => ({ ...prev, security }))}
+                onChange={(security) => fieldsHist.commit((prev) => ({ ...prev, security }))}
               />
             </>
           )}
@@ -287,18 +326,18 @@ export function QrScreen({
             <>
               <Field
                 value={fields.name}
-                onChange={(name) => setFields((prev) => ({ ...prev, name }))}
+                onChange={(name) => fieldsHist.commit((prev) => ({ ...prev, name }), true)}
                 placeholder="Name"
               />
               <Field
                 value={fields.phone}
-                onChange={(phone) => setFields((prev) => ({ ...prev, phone }))}
+                onChange={(phone) => fieldsHist.commit((prev) => ({ ...prev, phone }), true)}
                 placeholder="Phone (optional)"
                 keyboard="phone-pad"
               />
               <Field
                 value={fields.email}
-                onChange={(email) => setFields((prev) => ({ ...prev, email }))}
+                onChange={(email) => fieldsHist.commit((prev) => ({ ...prev, email }), true)}
                 placeholder="Email (optional)"
                 keyboard="email-address"
               />
@@ -394,7 +433,6 @@ export function QrScreen({
               <PrimaryButton
                 label={openable ? (scannedCheck.risky ? 'Open anyway' : 'Open') : 'Copy'}
                 onPress={openScanned}
-                orange={scannedCheck.risky}
               />
               {openable && (
                 <GhostButton
@@ -417,8 +455,18 @@ export function QrScreen({
           notify={notify}
           onOpen={setOpenId}
           onDelete={(id) => {
+            const item = state.qrHistory.find((row) => row.id === id);
+            if (!item) return;
+            removed.commit(item);
             deleteQrHistory(id);
             if (openId === id) setOpenId(null);
+            notify('Removed', {
+              label: 'Undo',
+              onPress: () => {
+                restoreQrHistory(item);
+                removed.undo();
+              },
+            });
           }}
           onClear={() => {
             Alert.alert(
@@ -456,11 +504,12 @@ function QrHistoryList({
   items: QrHistoryItem[];
   openId: string | null;
   qrRef: { current: { toDataURL: (cb: (b64: string) => void) => void } | null };
-  notify: (msg: string) => void;
+  notify: Notify;
   onOpen: (id: string | null) => void;
   onDelete: (id: string) => void;
   onClear: () => void;
 }) {
+  const { type, styles } = useThemed(makeStyles);
   const open = items.find((item) => item.id === openId) ?? null;
   if (open) {
     return (
@@ -564,13 +613,14 @@ function QrFileActions({
   onCopy,
   file,
 }: {
-  notify: (msg: string) => void;
+  notify: Notify;
   copyLabel: string;
   /** Mail subject only. The sheet item is the PNG file. */
   subject?: string;
   onCopy: () => void;
   file: () => Promise<string | null>;
 }) {
+  const { styles } = useThemed(makeStyles);
   return (
     <>
       <View style={styles.qrActions}>
@@ -620,6 +670,7 @@ function qrFileFrom(
 }
 
 function SwipeRow({ children, onDelete }: { children: ReactNode; onDelete: () => void }) {
+  const { styles } = useThemed(makeStyles);
   const [{ x, pan }] = useState(() => {
     const translate = new Animated.Value(0);
     const responder = PanResponder.create({
@@ -658,41 +709,43 @@ function SwipeRow({ children, onDelete }: { children: ReactNode; onDelete: () =>
   );
 }
 
-const styles = StyleSheet.create({
-  qrCard: { alignItems: 'center', gap: 12, paddingVertical: 24 },
-  qrActions: { flexDirection: 'row', gap: 10, alignSelf: 'stretch', alignItems: 'center' },
-  half: { flex: 1 },
-  center: { textAlign: 'center' },
-  cameraWrap: { gap: 8 },
-  camera: { width: '100%', height: 340, borderRadius: 16, overflow: 'hidden' },
-  scanCard: { gap: 10 },
-  host: { fontSize: 22, fontWeight: '800', color: colors.ink },
-  warnBox: { backgroundColor: '#FFF4E5', borderRadius: 12, padding: 12, gap: 4 },
-  warnTitle: { fontSize: 15, fontWeight: '700', color: '#9A4D00' },
-  warnLine: { fontSize: 14, color: '#7A3E00' },
-  okLine: { fontSize: 14, color: colors.good },
-  empty: { gap: 6 },
-  historyRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  historyMain: { flex: 1, gap: 2 },
-  thumb: {
-    width: 56,
-    height: 56,
-    borderRadius: 8,
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-  },
-  swipeWrap: { borderRadius: 18, overflow: 'hidden' },
-  swipeDelete: {
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    bottom: 0,
-    width: 88,
-    backgroundColor: colors.danger,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  swipeDeleteLabel: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    qrCard: { alignItems: 'center', gap: 12, paddingVertical: 24 },
+    qrActions: { flexDirection: 'row', gap: 10, alignSelf: 'stretch', alignItems: 'center' },
+    half: { flex: 1 },
+    center: { textAlign: 'center' },
+    cameraWrap: { gap: 8 },
+    camera: { width: '100%', height: 340, borderRadius: 16, overflow: 'hidden' },
+    scanCard: { gap: 10 },
+    host: { fontSize: 22, fontWeight: '800', color: p.textPrimary },
+    warnBox: { backgroundColor: p.secondary, borderRadius: 12, padding: 12, gap: 4 },
+    warnTitle: { fontSize: 15, fontWeight: '700', color: p.warning },
+    warnLine: { fontSize: 14, color: p.textPrimary },
+    okLine: { fontSize: 14, color: p.success },
+    empty: { gap: 6 },
+    historyRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    historyMain: { flex: 1, gap: 2 },
+    thumb: {
+      width: 56,
+      height: 56,
+      borderRadius: 8,
+      overflow: 'hidden',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: p.surface,
+    },
+    swipeWrap: { borderRadius: 18, overflow: 'hidden' },
+    swipeDelete: {
+      position: 'absolute',
+      right: 0,
+      top: 0,
+      bottom: 0,
+      width: 88,
+      backgroundColor: p.destructive,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    swipeDeleteLabel: { color: p.onDestructive, fontSize: 15, fontWeight: '700' },
+  });
+}

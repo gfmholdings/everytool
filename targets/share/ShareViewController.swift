@@ -300,11 +300,11 @@ struct ShareView: View {
                 ProgressView()
                 Text("Reading what you shared…")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color(uiColor: Palette.textSecondary))
             } else if model.items.isEmpty {
                 Text("Nothing Everytool can use here — it takes photos, PDFs, text, and files it can turn into a PDF.")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color(uiColor: Palette.textSecondary))
                     .multilineTextAlignment(.center)
             } else if let routed = model.routed {
                 Text("Saved. Opening \(label(for: routed))…")
@@ -312,11 +312,11 @@ struct ShareView: View {
             } else {
                 Text(summary)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color(uiColor: Palette.textSecondary))
                 if let note = model.officeShareNote {
                     Text(note)
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color(uiColor: Palette.textSecondary))
                         .multilineTextAlignment(.center)
                 }
                 ForEach(model.routes, id: \.tool) { route in
@@ -334,6 +334,7 @@ struct ShareView: View {
             Spacer()
         }
         .padding(20)
+        .tint(Color(uiColor: Palette.primary))
         // The share sheet action is named Everytool. A PDF has nowhere else
         // to go, so that one tap opens the PDF tool. iOS has no setting for
         // a default PDF app; this is the Open In / share path.

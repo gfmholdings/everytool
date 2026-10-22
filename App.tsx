@@ -36,8 +36,9 @@ import { StitchScreen } from './src/screens/StitchScreen';
 import { TextScreen } from './src/screens/TextScreen';
 import { AppStoreProvider, useStore } from './src/store/AppStore';
 import { takeOpenedPdf, takePendingTool } from './src/store/sharedVault';
-import { colors, space, type } from './src/theme';
+import { space, type Palette } from './src/theme';
 import { TOOLS, type ToolId } from './src/types';
+import { useThemed } from './src/useTheme';
 
 interface Pending {
   tool: ToolId;
@@ -78,6 +79,7 @@ function requestFor(target: { record: boolean; session: boolean }) {
 }
 
 function Root() {
+  const { type, styles } = useThemed(makeStyles);
   const insets = useSafeAreaInsets();
   const { ready, addClip } = useStore();
   const [tool, setTool] = useState<ToolId | null>(null);
@@ -86,15 +88,15 @@ function Root() {
     toolRef.current = tool;
   }, [tool]);
   const [pending, setPending] = useState<Pending | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ text: string; undo?: () => void } | null>(null);
   const [toastAnim] = useState(() => new Animated.Value(0));
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastGen = useRef(0);
 
   const notify = useCallback(
-    (msg: string) => {
+    (msg: string, action?: { label: string; onPress: () => void }) => {
       const gen = (toastGen.current += 1);
-      setToast(msg);
+      setToast({ text: msg, undo: action?.onPress });
       Animated.timing(toastAnim, {
         toValue: 1,
         duration: 160,
@@ -110,7 +112,7 @@ function Root() {
           // A newer toast may already be showing. Don't clear it.
           if (toastGen.current === gen) setToast(null);
         });
-      }, 2200);
+      }, action ? 4000 : 2200);
     },
     [toastAnim],
   );
@@ -356,7 +358,7 @@ function Root() {
           onBack={back}
         />
       ) : (
-        <SplitScreen onBack={back} />
+        <SplitScreen onBack={back} notify={notify} />
       );
       break;
     case 'gif':
@@ -417,7 +419,20 @@ function Root() {
       )}
       {toast && (
         <Animated.View style={[styles.toast, { opacity: toastAnim }]}>
-          <Text style={styles.toastText}>{toast}</Text>
+          <Text style={styles.toastText}>{toast.text}</Text>
+          {toast.undo && (
+            <Pressable
+              accessibilityLabel="Undo"
+              onPress={() => {
+                const run = toast.undo;
+                setToast(null);
+                run?.();
+              }}
+              hitSlop={8}
+            >
+              <Text style={styles.toastUndo}>Undo</Text>
+            </Pressable>
+          )}
         </Animated.View>
       )}
     </View>
@@ -435,61 +450,68 @@ export default function App() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
-  loading: {
-    flex: 1,
-    backgroundColor: colors.bg,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  loadingText: {
-    fontSize: 15,
-    fontWeight: '800',
-    letterSpacing: 1.2,
-    color: colors.accent,
-    textTransform: 'uppercase',
-  },
-  home: { padding: space.screen, gap: space.gap, paddingTop: 24 },
-  intro: { marginTop: -4 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.gap },
-  tile: {
-    width: '48%',
-    flexGrow: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: colors.card,
-    borderRadius: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    minHeight: 72,
-  },
-  tileGlyph: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tileName: { fontSize: 16, fontWeight: '600', color: colors.ink, flexShrink: 1 },
-  surfacesCard: {
-    backgroundColor: colors.card,
-    borderRadius: space.radius,
-    padding: space.cardPad,
-    marginTop: 4,
-  },
-  spaced: { marginTop: 8 },
-  toast: {
-    position: 'absolute',
-    left: 24,
-    right: 24,
-    bottom: 36,
-    backgroundColor: colors.ink,
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  toastText: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: p.background },
+    loading: {
+      flex: 1,
+      backgroundColor: p.background,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    loadingText: {
+      fontSize: 15,
+      fontWeight: '800',
+      letterSpacing: 1.2,
+      color: p.primary,
+      textTransform: 'uppercase',
+    },
+    home: { padding: space.screen, gap: space.gap, paddingTop: 24 },
+    intro: { marginTop: -4 },
+    grid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.gap },
+    tile: {
+      width: '48%',
+      flexGrow: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      backgroundColor: p.surface,
+      borderRadius: 24,
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+      minHeight: 72,
+    },
+    tileGlyph: {
+      width: 44,
+      height: 44,
+      borderRadius: 14,
+      backgroundColor: p.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    tileName: { fontSize: 16, fontWeight: '600', color: p.textPrimary, flexShrink: 1 },
+    surfacesCard: {
+      backgroundColor: p.surface,
+      borderRadius: space.radius,
+      padding: space.cardPad,
+      marginTop: 4,
+    },
+    spaced: { marginTop: 8 },
+    toast: {
+      position: 'absolute',
+      left: 24,
+      right: 24,
+      bottom: 36,
+      backgroundColor: p.toast,
+      borderRadius: 12,
+      paddingVertical: 12,
+      paddingHorizontal: 16,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12,
+    },
+    toastText: { color: p.onToast, fontSize: 15, fontWeight: '600', flex: 1 },
+    toastUndo: { color: p.onToast, fontSize: 15, fontWeight: '800' },
+  });
+}

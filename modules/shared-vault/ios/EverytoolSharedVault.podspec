@@ -19,7 +19,9 @@ Pod::Spec.new do |s|
   s.dependency 'ExpoModulesCore'
   s.frameworks = 'ReplayKit', 'UserNotifications', 'Vision', 'VisionKit', 'ImageIO', 'WidgetKit', 'AVFoundation', 'CoreGraphics'
 
-  s.source_files = '**/*.{h,m,swift}'
+  # Palette.swift lives with the extensions. Compile that one file here too
+  # so the receipt scanner uses the same tokens without a second copy.
+  s.source_files = '**/*.{h,m,swift}', '../../../targets/_shared/Palette.swift'
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'SWIFT_COMPILATION_MODE' => 'wholemodule'

@@ -3,10 +3,13 @@ import { useMemo, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Switch, Text, useColorScheme, View } from 'react-native';
 
 import { Card, Field, PrimaryButton, Segmented, ToolShell } from '../components/ui';
+import { useUndoHistory } from '../hooks/useUndoHistory';
 import { daysLeft, describeDaysLeft, sortCountdowns } from '../lib/countdowns';
 import { countedBreakdown, countedDays, daysBetween, formatBreakdown } from '../lib/dates';
 import { useStore } from '../store/AppStore';
-import { colors, type } from '../theme';
+import type { Countdown } from '../types';
+import type { Palette } from '../theme';
+import { useThemed } from '../useTheme';
 
 type Mode = 'between' | 'until' | 'age';
 
@@ -38,9 +41,11 @@ export function DaysScreen({
   notify,
 }: {
   onBack: () => void;
-  notify?: (msg: string) => void;
+  notify?: (msg: string, action?: { label: string; onPress: () => void }) => void;
 }) {
-  const { state, addCountdown, deleteCountdown } = useStore();
+  const { palette, type, styles } = useThemed(makeStyles);
+  const { state, addCountdown, deleteCountdown, restoreCountdown } = useStore();
+  const removed = useUndoHistory<Countdown | null>(null, { shake: true });
   const [title, setTitle] = useState('');
   const [mode, setMode] = useState<Mode>(state.countdowns.length > 0 ? 'until' : 'between');
   const today = useMemo(() => startOfDay(new Date()), []);
@@ -74,13 +79,13 @@ export function DaysScreen({
         </Card>
       </Pressable>
       {openPicker === key && (
-        <View style={[styles.pickerCard, pickerVariant === 'dark' && styles.pickerCardDark]}>
+        <View style={styles.pickerCard}>
           <DateTimePicker
             value={value}
             mode="date"
             display={Platform.OS === 'ios' ? 'inline' : 'default'}
             themeVariant={pickerVariant}
-            accentColor={colors.accent}
+            accentColor={palette.primary}
             style={styles.picker}
             onChange={(_e, d) => {
               if (d) set(startOfDay(d));
@@ -97,8 +102,40 @@ export function DaysScreen({
   const until = countedDays(today, target, includeUntil);
   const age = daysBetween(birth, today);
 
+  const undoDelete = () => {
+    const item = removed.present;
+    if (!item) return;
+    removed.undo();
+    restoreCountdown(item);
+  };
+  const redoDelete = () => {
+    const item = removed.redo();
+    if (!item) return;
+    deleteCountdown(item.id);
+  };
+  const removeCountdown = (c: Countdown) => {
+    removed.commit(c);
+    deleteCountdown(c.id);
+    notify?.('Removed', {
+      label: 'Undo',
+      onPress: () => {
+        restoreCountdown(c);
+        removed.undo();
+      },
+    });
+  };
+
   return (
-    <ToolShell title="Days counter" onBack={onBack}>
+    <ToolShell
+      title="Days counter"
+      onBack={onBack}
+      undo={{
+        canUndo: removed.canUndo,
+        canRedo: removed.canRedo,
+        onUndo: undoDelete,
+        onRedo: redoDelete,
+      }}
+    >
       <Segmented
         options={[
           { id: 'between', label: 'Between' },
@@ -168,10 +205,10 @@ export function DaysScreen({
                         {fmt(new Date(c.date))} · {describeDaysLeft(raw, c.includeToday === true)}
                       </Text>
                     </View>
-                    <Text style={[type.num, n < 0 && { color: colors.faint }]}>{Math.abs(n)}</Text>
+                    <Text style={[type.num, n < 0 && { color: palette.textSecondary }]}>{Math.abs(n)}</Text>
                     <Pressable
                       accessibilityLabel={`Delete ${c.title}`}
-                      onPress={() => deleteCountdown(c.id)}
+                      onPress={() => removeCountdown(c)}
                       hitSlop={8}
                     >
                       <Text style={styles.cdDelete}>✕</Text>
@@ -211,6 +248,7 @@ function IncludeToday({
   value: boolean;
   onChange: (next: boolean) => void;
 }) {
+  const { palette, type, styles } = useThemed(makeStyles);
   return (
     <View style={styles.includeRow}>
       <Text style={type.body}>Include today</Text>
@@ -218,34 +256,35 @@ function IncludeToday({
         accessibilityLabel="Include today"
         value={value}
         onValueChange={onChange}
-        trackColor={{ false: colors.border, true: colors.accent }}
+        trackColor={{ false: palette.separator, true: palette.primary }}
       />
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  dateCard: { marginTop: 6, paddingVertical: 14 },
-  pickerCard: {
-    backgroundColor: colors.card,
-    borderRadius: 18,
-    overflow: 'hidden',
-  },
-  pickerCardDark: { backgroundColor: '#1C1C1E' },
-  picker: { width: '100%' },
-  result: { alignItems: 'center', gap: 2, paddingVertical: 22 },
-  breakdown: { marginTop: 6 },
-  includeRow: {
-    alignSelf: 'stretch',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 14,
-    paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
-  },
-  cdRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12 },
-  cdMain: { flex: 1, gap: 2 },
-  cdDelete: { fontSize: 16, color: colors.faint, paddingHorizontal: 4 },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    dateCard: { marginTop: 6, paddingVertical: 14 },
+    pickerCard: {
+      backgroundColor: p.surface,
+      borderRadius: 18,
+      overflow: 'hidden',
+    },
+    picker: { width: '100%' },
+    result: { alignItems: 'center', gap: 2, paddingVertical: 22 },
+    breakdown: { marginTop: 6 },
+    includeRow: {
+      alignSelf: 'stretch',
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginTop: 14,
+      paddingTop: 12,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: p.separator,
+    },
+    cdRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12 },
+    cdMain: { flex: 1, gap: 2 },
+    cdDelete: { fontSize: 16, color: p.textSecondary, paddingHorizontal: 4 },
+  });
+}

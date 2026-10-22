@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 
 import { Card, Field, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
+import { useUndoHistory } from '../hooks/useUndoHistory';
 import { formatBytes, measureImage, saveToPhotos, shareFile, tempFileUri } from '../lib/files';
 import {
   estimateOutputBytes,
@@ -21,7 +22,8 @@ import {
   type SizeUnit,
 } from '../lib/resizePlan';
 import { reencodeImage } from '../store/sharedVault';
-import { colors, type } from '../theme';
+import type { Palette } from '../theme';
+import { useThemed } from '../useTheme';
 
 const WIDTHS = [640, 828, 1080, 1170, 1280, 1600] as const;
 
@@ -37,6 +39,30 @@ const QUALITIES = [
   { id: '0.7', label: 'Balanced' },
   { id: '0.9', label: 'Sharper' },
 ] as const;
+
+type Adjust = {
+  widthIdx: number;
+  widthOverride: number | null;
+  quality: string;
+  compressOnly: boolean;
+  sizeId: string | null;
+  customAmount: string;
+  customUnit: SizeUnit;
+  format: ResizeFormat;
+  stripMetadata: boolean;
+};
+
+const initialAdjust: Adjust = {
+  widthIdx: 2,
+  widthOverride: null,
+  quality: '0.7',
+  compressOnly: false,
+  sizeId: null,
+  customAmount: '',
+  customUnit: 'KB',
+  format: 'jpeg',
+  stripMetadata: true,
+};
 
 const MIME: Record<ResizeFormat, string> = {
   jpeg: 'image/jpeg',
@@ -69,16 +95,23 @@ export function ResizeScreen({
   initialSource?: { uri: string; width: number; height: number };
   notify: (msg: string) => void;
 }) {
+  const { type, styles } = useThemed(makeStyles);
   const [source, setSource] = useState<Source | null>(null);
-  const [widthIdx, setWidthIdx] = useState(2); // 1080
-  const [widthOverride, setWidthOverride] = useState<number | null>(null);
-  const [quality, setQuality] = useState<string>('0.7');
-  const [compressOnly, setCompressOnly] = useState(false);
-  const [sizeId, setSizeId] = useState<string | null>(null);
-  const [customAmount, setCustomAmount] = useState('');
-  const [customUnit, setCustomUnit] = useState<SizeUnit>('KB');
-  const [format, setFormat] = useState<ResizeFormat>('jpeg');
-  const [stripMetadata, setStripMetadata] = useState(true);
+  const adjust = useUndoHistory<Adjust>(initialAdjust, { shake: true });
+  const {
+    widthIdx,
+    widthOverride,
+    quality,
+    compressOnly,
+    sizeId,
+    customAmount,
+    customUnit,
+    format,
+    stripMetadata,
+  } = adjust.present;
+  const patch = (part: Partial<Adjust>, group = false) => {
+    adjust.commit((current) => ({ ...current, ...part }), group);
+  };
   const [result, setResult] = useState<Result | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -92,8 +125,7 @@ export function ResizeScreen({
     setSource({ uri, width: size.width, height: size.height, bytes: info.size ?? 0 });
     // Default to the largest preset that actually shrinks the photo.
     const fit = WIDTHS.reduce((best, wd, i) => (wd < size.width ? i : best), 0);
-    setWidthIdx(Math.min(2, fit));
-    setWidthOverride(null);
+    patch({ widthIdx: Math.min(2, fit), widthOverride: null });
     setResult(null);
   };
 
@@ -264,7 +296,16 @@ export function ResizeScreen({
   const liveWarning = source && live && cap != null ? fitWarning(live, chosenWidth, cap) : null;
 
   return (
-    <ToolShell title="Resize photo" onBack={onBack}>
+    <ToolShell
+      title="Resize photo"
+      onBack={onBack}
+      undo={{
+        canUndo: adjust.canUndo,
+        canRedo: adjust.canRedo,
+        onUndo: () => adjust.undo(),
+        onRedo: () => adjust.redo(),
+      }}
+    >
       {source && (
         <Card style={styles.previewCard}>
           <Image source={{ uri: source.uri }} style={styles.preview} />
@@ -290,11 +331,13 @@ export function ResizeScreen({
                   label={p.label}
                   active={active}
                   onPress={() => {
-                    setWidthIdx(idx);
-                    setWidthOverride(null);
-                    setQuality(p.quality);
-                    setCompressOnly(false);
-                    setSizeId(null);
+                    patch({
+                      widthIdx: idx,
+                      widthOverride: null,
+                      quality: p.quality,
+                      compressOnly: false,
+                      sizeId: null,
+                    });
                     setResult(null);
                   }}
                 />
@@ -308,9 +351,7 @@ export function ResizeScreen({
                   label={p.label}
                   active={active}
                   onPress={() => {
-                    setWidthOverride(p.width);
-                    setSizeId(p.id);
-                    setCompressOnly(false);
+                    patch({ widthOverride: p.width, sizeId: p.id, compressOnly: false });
                     setResult(null);
                   }}
                 />
@@ -337,8 +378,7 @@ export function ResizeScreen({
             ]}
             value={compressOnly ? 'compress' : 'dimensions'}
             onChange={(id) => {
-              setCompressOnly(id === 'compress');
-              setWidthOverride(null);
+              patch({ compressOnly: id === 'compress', widthOverride: null });
               setResult(null);
             }}
           />
@@ -356,8 +396,7 @@ export function ResizeScreen({
                       active={active}
                       disabled={disabled}
                       onPress={() => {
-                        setWidthIdx(i);
-                        setWidthOverride(null);
+                        patch({ widthIdx: i, widthOverride: null });
                         setResult(null);
                       }}
                     />
@@ -374,8 +413,7 @@ export function ResizeScreen({
                 label={c.label}
                 active={sizeId === c.id}
                 onPress={() => {
-                  setSizeId(sizeId === c.id ? null : c.id);
-                  setWidthOverride(null);
+                  patch({ sizeId: sizeId === c.id ? null : c.id, widthOverride: null });
                   setResult(null);
                 }}
               />
@@ -384,7 +422,7 @@ export function ResizeScreen({
               label="Custom"
               active={sizeId === 'custom'}
               onPress={() => {
-                setSizeId(sizeId === 'custom' ? null : 'custom');
+                patch({ sizeId: sizeId === 'custom' ? null : 'custom' });
                 setResult(null);
               }}
             />
@@ -395,7 +433,7 @@ export function ResizeScreen({
                 <Field
                   value={customAmount}
                   onChange={(v) => {
-                    setCustomAmount(v);
+                    patch({ customAmount: v }, true);
                     setResult(null);
                   }}
                   placeholder="Size"
@@ -409,7 +447,7 @@ export function ResizeScreen({
                 ]}
                 value={customUnit}
                 onChange={(u) => {
-                  setCustomUnit(u);
+                  patch({ customUnit: u });
                   setResult(null);
                 }}
               />
@@ -422,7 +460,7 @@ export function ResizeScreen({
                 options={QUALITIES.map((q) => ({ id: q.id as string, label: q.label }))}
                 value={quality}
                 onChange={(q) => {
-                  setQuality(q);
+                  patch({ quality: q });
                   setResult(null);
                 }}
               />
@@ -437,14 +475,14 @@ export function ResizeScreen({
             ]}
             value={format}
             onChange={(f) => {
-              setFormat(f);
+              patch({ format: f });
               setResult(null);
             }}
           />
           <PrimaryChip
             label={stripMetadata ? 'Strip location & camera info' : 'Keep camera info'}
             active={stripMetadata}
-            onPress={() => setStripMetadata((v) => !v)}
+            onPress={() => patch({ stripMetadata: !stripMetadata })}
           />
           <Text style={type.small}>
             {stripMetadata
@@ -474,7 +512,6 @@ export function ResizeScreen({
             label={busy ? 'Resizing…' : 'Resize'}
             onPress={run}
             disabled={busy}
-            orange
           />
         </>
       )}
@@ -512,6 +549,7 @@ function PrimaryChip({
   disabled?: boolean;
   onPress: () => void;
 }) {
+  const { styles } = useThemed(makeStyles);
   return (
     <Text
       onPress={disabled ? undefined : onPress}
@@ -526,24 +564,26 @@ function PrimaryChip({
   );
 }
 
-const styles = StyleSheet.create({
-  previewCard: { alignItems: 'center', gap: 8 },
-  preview: { width: '100%', height: 200, borderRadius: 10, backgroundColor: colors.border },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  customRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  customField: { flex: 1 },
-  chip: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.ink,
-    backgroundColor: colors.card,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    overflow: 'hidden',
-  },
-  chipActive: { backgroundColor: colors.accent, color: '#FFFFFF' },
-  resultCard: { gap: 10 },
-  warning: { color: colors.orange, fontSize: 15 },
-  error: { color: colors.danger, fontSize: 15 },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    previewCard: { alignItems: 'center', gap: 8 },
+    preview: { width: '100%', height: 200, borderRadius: 10, backgroundColor: p.separator },
+    chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    customRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    customField: { flex: 1 },
+    chip: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: p.textPrimary,
+      backgroundColor: p.surface,
+      borderRadius: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 9,
+      overflow: 'hidden',
+    },
+    chipActive: { backgroundColor: p.primary, color: p.onPrimary },
+    resultCard: { gap: 10 },
+    warning: { color: p.warning, fontSize: 15 },
+    error: { color: p.destructive, fontSize: 15 },
+  });
+}

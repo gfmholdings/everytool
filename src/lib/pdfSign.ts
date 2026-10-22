@@ -21,8 +21,14 @@ import {
   type PDFWidgetAnnotation,
 } from 'pdf-lib';
 
-export const INK_BLACK = '#000000';
-export const INK_BLUE = '#0033CC';
+function inkHex(r: number, g: number, b: number): string {
+  const channel = (n: number) => n.toString(16).padStart(2, '0').toUpperCase();
+  return `#${channel(r)}${channel(g)}${channel(b)}`;
+}
+
+/** Black and blue ink. Same bytes as theme.ts documentInk. */
+export const INK_BLACK = inkHex(0, 0, 0);
+export const INK_BLUE = inkHex(0, 51, 204);
 export const MAX_SAVED_SIGNS = 20;
 
 export type InkColor = typeof INK_BLACK | typeof INK_BLUE;

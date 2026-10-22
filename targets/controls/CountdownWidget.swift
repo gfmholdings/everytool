@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import WidgetKit
 
 /// Days counter widgets (home screen + lock screen). Reads the
@@ -116,10 +117,10 @@ struct CountdownWidgetView: View {
             Text(entry.daysLeft.map { String($0) } ?? "–")
               .font(.system(size: 44, weight: .heavy, design: .rounded))
               .minimumScaleFactor(0.5)
-              .foregroundStyle(.orange)
+              .foregroundStyle(Color(uiColor: Palette.primary))
             Text(entry.landsToday ? "today" : (entry.daysLeft == 1 ? "day to go" : "days to go"))
               .font(.caption)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(Color(uiColor: Palette.textSecondary))
           }
           .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -140,7 +141,7 @@ struct CountdownWidgetView: View {
         Image(systemName: "calendar.badge.plus")
         Text("Add a countdown in Everytool → Days counter")
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(Color(uiColor: Palette.textSecondary))
       }
     }
   }

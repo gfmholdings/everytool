@@ -42,6 +42,11 @@ export function deleteCountdown(state: AppState, id: string): AppState {
   return { ...state, countdowns: state.countdowns.filter((c) => c.id !== id) };
 }
 
+export function restoreCountdown(state: AppState, item: Countdown): AppState {
+  if (state.countdowns.some((c) => c.id === item.id)) return state;
+  return { ...state, countdowns: [...state.countdowns, item].slice(-MAX_COUNTDOWNS) };
+}
+
 /** Upcoming first (soonest), then past ones (most recent first). */
 export function sortCountdowns(list: Countdown[], today: Date = new Date()): Countdown[] {
   const t = localMidnight(today);

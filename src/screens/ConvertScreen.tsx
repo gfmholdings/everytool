@@ -8,7 +8,8 @@ import { Card, GhostButton, PrimaryButton, Segmented, ToolShell } from '../compo
 import { formatBytes, measureImage, saveToPhotos, shareFile, tempFileUri } from '../lib/files';
 import { mergePdfSources, pdfSourceFromUri, type PdfSource } from '../lib/pdf';
 import { imageHasLocation, stripLocation } from '../store/sharedVault';
-import { colors, type } from '../theme';
+import type { Palette } from '../theme';
+import { useThemed } from '../useTheme';
 
 /** jpg/png re-encode; pdf combines; "clean" keeps the photo as-is minus location. */
 type Format = 'jpg' | 'png' | 'pdf' | 'clean';
@@ -61,6 +62,7 @@ export function ConvertScreen({
   initialSource?: Source;
   notify: (msg: string) => void;
 }) {
+  const { type, styles } = useThemed(makeStyles);
   const [sources, setSources] = useState<Source[]>(initialSource ? [initialSource] : []);
   const [format, setFormat] = useState<Format>('jpg');
   const [outputs, setOutputs] = useState<Output[]>([]);
@@ -235,7 +237,6 @@ export function ConvertScreen({
           label={busy ? 'Working…' : label}
           onPress={() => void convert()}
           disabled={busy}
-          orange
           testID="convert.run"
         />
       )}
@@ -277,13 +278,15 @@ export function ConvertScreen({
   );
 }
 
-const styles = StyleSheet.create({
-  previewCard: { alignItems: 'center', gap: 8 },
-  preview: { width: '100%', height: 220, borderRadius: 10, backgroundColor: colors.border },
-  resultCard: { gap: 10 },
-  fileRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  flex: { flex: 1 },
-  center: { textAlign: 'center' },
-  ok: { color: colors.good, fontSize: 14 },
-  error: { color: colors.danger, fontSize: 15 },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    previewCard: { alignItems: 'center', gap: 8 },
+    preview: { width: '100%', height: 220, borderRadius: 10, backgroundColor: p.separator },
+    resultCard: { gap: 10 },
+    fileRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    flex: { flex: 1 },
+    center: { textAlign: 'center' },
+    ok: { color: p.success, fontSize: 14 },
+    error: { color: p.destructive, fontSize: 15 },
+  });
+}

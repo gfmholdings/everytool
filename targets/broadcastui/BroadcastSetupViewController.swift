@@ -11,18 +11,19 @@ import UIKit
 class BroadcastSetupViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = Palette.background
 
         let title = UILabel()
         title.text = "Long screenshot with Everytool"
         title.font = .systemFont(ofSize: 19, weight: .bold)
+        title.textColor = Palette.textPrimary
         title.numberOfLines = 0
 
         let body = UILabel()
         body.text =
             "Start the recording, then scroll the page slowly, a screen at a time. Stop the recording when you're done — Everytool stitches the pieces into one long image."
         body.font = .systemFont(ofSize: 15)
-        body.textColor = .secondaryLabel
+        body.textColor = Palette.textSecondary
         body.numberOfLines = 0
 
         let stack = UIStackView(arrangedSubviews: [title, body])

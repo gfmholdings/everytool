@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Card, Field, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
+import { useUndoHistory } from '../hooks/useUndoHistory';
 import { shareText } from '../lib/files';
 import { evenBillShareText, formatMoney, itemBillShareText, splitBill, toCents } from '../lib/money';
 import {
@@ -13,7 +14,8 @@ import {
   type ReceiptItem,
 } from '../lib/receipt';
 import { liveTextSupported, recognizeText, scanDocumentPages, scanLiveText } from '../store/sharedVault';
-import { colors, type } from '../theme';
+import type { Palette } from '../theme';
+import { useThemed } from '../useTheme';
 
 const PERSON = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
@@ -23,10 +25,37 @@ const TIP_PRESETS = [0, 10, 15, 18, 20, 25];
  * Split bill: total, tax, tip (preset or custom), people. All math in
  * integer cents — the per-person shares always sum to the grand total.
  */
-export function SplitScreen({ onBack }: { onBack: () => void }) {
+type Bill = {
+  items: ReceiptItem[];
+  assign: number[][];
+  totalStr: string;
+  taxStr: string;
+  tipPct: number;
+  customTip: string;
+  people: number;
+};
+
+const emptyBill: Bill = {
+  items: [],
+  assign: [],
+  totalStr: '',
+  taxStr: '',
+  tipPct: 18,
+  customTip: '',
+  people: 2,
+};
+
+export function SplitScreen({
+  onBack,
+  notify,
+}: {
+  onBack: () => void;
+  notify?: (msg: string, action?: { label: string; onPress: () => void }) => void;
+}) {
+  const { type, styles } = useThemed(makeStyles);
   const [mode, setMode] = useState<'even' | 'items'>('even');
-  const [items, setItems] = useState<ReceiptItem[]>([]);
-  const [assign, setAssign] = useState<number[][]>([]);
+  const bill = useUndoHistory<Bill>(emptyBill, { shake: true });
+  const { items, assign, totalStr, taxStr, tipPct, customTip, people } = bill.present;
   const [newName, setNewName] = useState('');
   const [newPrice, setNewPrice] = useState('');
   const [scanNote, setScanNote] = useState<string | null>(null);
@@ -36,11 +65,6 @@ export function SplitScreen({ onBack }: { onBack: () => void }) {
   const [draftName, setDraftName] = useState('');
   const [draftPrice, setDraftPrice] = useState('');
   const [liveText] = useState(() => liveTextSupported());
-  const [totalStr, setTotalStr] = useState('');
-  const [taxStr, setTaxStr] = useState('');
-  const [tipPct, setTipPct] = useState(18);
-  const [customTip, setCustomTip] = useState('');
-  const [people, setPeople] = useState(2);
 
   const isCustom = customTip.trim().length > 0;
   const effectiveTip = isCustom ? Number.parseFloat(customTip) || 0 : tipPct;
@@ -75,15 +99,21 @@ export function SplitScreen({ onBack }: { onBack: () => void }) {
       setScanNote('No prices found. Try a flatter, closer photo — or add items by hand below.');
       return;
     }
-    setItems(parsed.items);
-    setAssign(parsed.items.map(() => []));
+    bill.commit((current) => {
+      const next: Bill = {
+        ...current,
+        items: parsed.items,
+        assign: parsed.items.map(() => []),
+      };
+      if (parsed.taxCents != null) next.taxStr = (parsed.taxCents / 100).toFixed(2);
+      if (parsed.tipCents != null && parsed.tipCents > 0) {
+        const sum = parsed.items.reduce((a, b) => a + b.cents, 0);
+        if (sum > 0) next.customTip = ((parsed.tipCents / sum) * 100).toFixed(1);
+      }
+      return next;
+    });
     setReviewing(true);
     setEditing(null);
-    if (parsed.taxCents != null) setTaxStr((parsed.taxCents / 100).toFixed(2));
-    if (parsed.tipCents != null && parsed.tipCents > 0) {
-      const sum = parsed.items.reduce((a, b) => a + b.cents, 0);
-      if (sum > 0) setCustomTip(((parsed.tipCents / sum) * 100).toFixed(1));
-    }
     const itemsSum = parsed.items.reduce((a, b) => a + b.cents, 0);
     setScanNote(
       parsed.totalCents != null &&
@@ -166,30 +196,47 @@ export function SplitScreen({ onBack }: { onBack: () => void }) {
   };
 
   const toggle = (k: number, p: number) =>
-    setAssign((all) => {
-      const next = all.map((a) => [...a]);
+    bill.commit((current) => {
+      const next = current.assign.map((a) => [...a]);
       while (next.length <= k) next.push([]);
       const cur = next[k]!;
       next[k] = cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p];
-      return next;
+      return { ...current, assign: next };
     });
 
   const removeItem = (k: number) => {
-    setItems((all) => all.filter((_, i) => i !== k));
-    setAssign((all) => all.filter((_, i) => i !== k));
+    bill.commit((current) => ({
+      ...current,
+      items: current.items.filter((_, i) => i !== k),
+      assign: current.assign.filter((_, i) => i !== k),
+    }));
+    notify?.('Removed', { label: 'Undo', onPress: () => bill.undo() });
   };
 
   const addItem = () => {
     const cents = toCents(Number.parseFloat(newPrice) || 0);
     if (!newName.trim() || cents <= 0) return;
-    setItems((all) => [...all, { name: newName.trim(), cents }]);
-    setAssign((all) => [...all, []]);
+    const name = newName.trim();
+    bill.commit((current) => ({
+      ...current,
+      items: [...current.items, { name, cents }],
+      assign: [...current.assign, []],
+    }));
     setNewName('');
     setNewPrice('');
   };
 
   return (
-    <ToolShell title="Split bill" onBack={onBack}>
+    <ToolShell
+      title="Split bill"
+      onBack={onBack}
+      undo={{
+        canUndo: bill.canUndo,
+        canRedo: bill.canRedo,
+        onUndo: () => bill.undo(),
+        onRedo: () => bill.redo(),
+      }}
+    >
       <Segmented
         options={[
           { id: 'even', label: 'Split evenly' },
@@ -259,7 +306,10 @@ export function SplitScreen({ onBack }: { onBack: () => void }) {
                       const cents = toCents(Number.parseFloat(draftPrice) || 0);
                       const name = draftName.trim();
                       if (name && cents > 0) {
-                        setItems((all) => all.map((it, i) => (i === k ? { name, cents } : it)));
+                        bill.commit((current) => ({
+                          ...current,
+                          items: current.items.map((it, i) => (i === k ? { name, cents } : it)),
+                        }));
                       }
                       setEditing(null);
                     }}
@@ -314,14 +364,14 @@ export function SplitScreen({ onBack }: { onBack: () => void }) {
       {mode === 'even' && (
       <Field
         value={totalStr}
-        onChange={setTotalStr}
+        onChange={(value) => bill.commit((current) => ({ ...current, totalStr: value }), true)}
         placeholder="Bill total $"
         keyboard="decimal-pad"
       />
       )}
       <Field
         value={taxStr}
-        onChange={setTaxStr}
+        onChange={(value) => bill.commit((current) => ({ ...current, taxStr: value }), true)}
         placeholder="Tax $ (optional)"
         keyboard="decimal-pad"
       />
@@ -334,13 +384,12 @@ export function SplitScreen({ onBack }: { onBack: () => void }) {
         }))}
         value={String(tipPct)}
         onChange={(v) => {
-          setTipPct(Number(v));
-          setCustomTip('');
+          bill.commit((current) => ({ ...current, tipPct: Number(v), customTip: '' }));
         }}
       />
       <Field
         value={customTip}
-        onChange={setCustomTip}
+        onChange={(value) => bill.commit((current) => ({ ...current, customTip: value }), true)}
         placeholder="Custom tip % (optional)"
         keyboard="decimal-pad"
       />
@@ -349,14 +398,14 @@ export function SplitScreen({ onBack }: { onBack: () => void }) {
       <View style={styles.stepper}>
         <Text
           style={styles.stepButton}
-          onPress={() => setPeople((p) => Math.max(1, p - 1))}
+          onPress={() => bill.commit((current) => ({ ...current, people: Math.max(1, current.people - 1) }))}
         >
           −
         </Text>
         <Text style={type.num}>{people}</Text>
         <Text
           style={styles.stepButton}
-          onPress={() => setPeople((p) => Math.min(99, p + 1))}
+          onPress={() => bill.commit((current) => ({ ...current, people: Math.min(99, current.people + 1) }))}
         >
           +
         </Text>
@@ -433,48 +482,50 @@ export function SplitScreen({ onBack }: { onBack: () => void }) {
   );
 }
 
-const styles = StyleSheet.create({
-  stepper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: colors.card,
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  stepButton: {
-    fontSize: 30,
-    fontWeight: '700',
-    color: colors.accent,
-    paddingHorizontal: 16,
-    paddingVertical: 4,
-  },
-  result: { gap: 8 },
-  resultRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  divider: { height: 1, backgroundColor: colors.border, marginVertical: 4 },
-  row: { flexDirection: 'row', gap: 10, alignItems: 'center' },
-  half: { flex: 1 },
-  flex: { flex: 1 },
-  flex2: { flex: 2 },
-  itemCard: { gap: 8, paddingVertical: 12 },
-  itemTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  remove: { fontSize: 15, color: colors.faint, paddingHorizontal: 4 },
-  edit: { fontSize: 15, fontWeight: '700', color: colors.accent, paddingHorizontal: 4 },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  chip: {
-    minWidth: 36,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 18,
-    backgroundColor: colors.bg,
-    alignItems: 'center',
-  },
-  chipOn: { backgroundColor: colors.accent },
-  chipText: { fontSize: 15, fontWeight: '700', color: colors.muted },
-  chipTextOn: { color: '#FFFFFF' },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    stepper: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      backgroundColor: p.surface,
+      borderRadius: 12,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+    },
+    stepButton: {
+      fontSize: 30,
+      fontWeight: '700',
+      color: p.primary,
+      paddingHorizontal: 16,
+      paddingVertical: 4,
+    },
+    result: { gap: 8 },
+    resultRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+    },
+    divider: { height: 1, backgroundColor: p.separator, marginVertical: 4 },
+    row: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+    half: { flex: 1 },
+    flex: { flex: 1 },
+    flex2: { flex: 2 },
+    itemCard: { gap: 8, paddingVertical: 12 },
+    itemTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    remove: { fontSize: 15, color: p.textSecondary, paddingHorizontal: 4 },
+    edit: { fontSize: 15, fontWeight: '700', color: p.primary, paddingHorizontal: 4 },
+    chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+    chip: {
+      minWidth: 36,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 18,
+      backgroundColor: p.background,
+      alignItems: 'center',
+    },
+    chipOn: { backgroundColor: p.primary },
+    chipText: { fontSize: 15, fontWeight: '700', color: p.textSecondary },
+    chipTextOn: { color: p.onPrimary },
+  });
+}

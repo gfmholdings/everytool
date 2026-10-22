@@ -72,6 +72,11 @@ export function deleteClip(state: AppState, id: string): AppState {
   return { ...state, clips: state.clips.filter((c) => c.id !== id) };
 }
 
+export function restoreClip(state: AppState, clip: Clip): AppState {
+  if (state.clips.some((c) => c.id === clip.id)) return state;
+  return { ...state, clips: [clip, ...state.clips] };
+}
+
 export function clearUnpinned(state: AppState): AppState {
   return { ...state, clips: state.clips.filter((c) => c.pinned) };
 }

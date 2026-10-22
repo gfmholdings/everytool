@@ -5,9 +5,14 @@ import type { QrContentType, QrHistoryItem, QrStyle } from '../types';
 
 export const MAX_QR_HISTORY = 100;
 
+function inkHex(r: number, g: number, b: number): string {
+  const channel = (n: number) => n.toString(16).padStart(2, '0').toUpperCase();
+  return `#${channel(r)}${channel(g)}${channel(b)}`;
+}
+
 export const DEFAULT_QR_STYLE: QrStyle = {
-  foreground: '#000000',
-  background: '#FFFFFF',
+  foreground: inkHex(0, 0, 0),
+  background: inkHex(255, 255, 255),
 };
 
 const CONTENT_TYPES = new Set<QrContentType>([
@@ -126,6 +131,12 @@ export function saveQrHistory(
 
 export function deleteQrHistoryItem(items: QrHistoryItem[], id: string): QrHistoryItem[] {
   return items.filter((q) => q.id !== id);
+}
+
+/** Put a deleted row back. The same id is kept so a second import does not duplicate it. */
+export function restoreQrHistoryItem(items: QrHistoryItem[], item: QrHistoryItem): QrHistoryItem[] {
+  if (items.some((q) => q.id === item.id)) return items;
+  return bounded([item, ...items]);
 }
 
 /** Combine two on-device copies. Identical content keeps the newer row. */

@@ -19,7 +19,8 @@ import {
   serializeLedger,
   type SplitLedger,
 } from '../lib/splitwise';
-import { colors, type } from '../theme';
+import type { Palette } from '../theme';
+import { useThemed } from '../useTheme';
 
 function thisPhone(): string {
   return `ios-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -40,6 +41,7 @@ export function SplitImportScreen({
   stored: string | null;
   onBack: () => void;
 }) {
+  const { palette, type, styles } = useThemed(makeStyles);
   const parsed = useMemo(() => parseGroupFile(text), [text]);
   const storedResult = useMemo(() => parseStoredLedger(stored), [stored]);
   const preview = useMemo(() => {
@@ -127,7 +129,7 @@ export function SplitImportScreen({
             <Text style={type.small}>{preview.changes.length - 6} more</Text>
           ) : null}
           <Text style={[type.small, styles.foot]}>Stays on this phone. No account and no iCloud.</Text>
-          <PrimaryButton label={busy ? 'Importing…' : 'Import'} onPress={onImport} disabled={busy} orange />
+          <PrimaryButton label={busy ? 'Importing…' : 'Import'} onPress={onImport} disabled={busy} />
           <GhostButton label="Not now" onPress={onBack} />
         </Card>
       ) : null}
@@ -146,16 +148,16 @@ export function SplitImportScreen({
               key={`${row.currency}:${row.name}:${row.text}`}
               style={[
                 styles.total,
-                row.tone === 'owed' && { color: colors.good },
-                row.tone === 'owes' && { color: colors.danger },
-                row.tone === 'settled' && { color: colors.muted },
+                row.tone === 'owed' && { color: palette.success },
+                row.tone === 'owes' && { color: palette.destructive },
+                row.tone === 'settled' && { color: palette.textSecondary },
               ]}
             >
               {row.text}
             </Text>
           ))}
           <View style={styles.actions}>
-            <PrimaryButton label="Share image" onPress={() => void onShareImage()} orange />
+            <PrimaryButton label="Share image" onPress={() => void onShareImage()} />
             <GhostButton label="Share text" onPress={() => void onShareText()} />
             <GhostButton label="Share group file" onPress={() => void onShareFile()} />
           </View>
@@ -174,13 +176,15 @@ export function SplitImportScreen({
   );
 }
 
-const styles = StyleSheet.create({
-  count: { marginTop: 8, marginBottom: 12 },
-  change: { fontSize: 16, color: colors.ink, marginBottom: 6 },
-  foot: { marginTop: 8, marginBottom: 16 },
-  owe: { fontSize: 17, fontWeight: '700', color: colors.ink, marginTop: 8 },
-  totalsLabel: { marginTop: 18 },
-  total: { fontSize: 16, fontWeight: '700', marginTop: 8 },
-  actions: { marginTop: 18, gap: 8 },
-  note: { color: colors.muted, fontSize: 14, marginTop: 12 },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    count: { marginTop: 8, marginBottom: 12 },
+    change: { fontSize: 16, color: p.textPrimary, marginBottom: 6 },
+    foot: { marginTop: 8, marginBottom: 16 },
+    owe: { fontSize: 17, fontWeight: '700', color: p.textPrimary, marginTop: 8 },
+    totalsLabel: { marginTop: 18 },
+    total: { fontSize: 16, fontWeight: '700', marginTop: 8 },
+    actions: { marginTop: 18, gap: 8 },
+    note: { color: p.textSecondary, fontSize: 14, marginTop: 12 },
+  });
+}
