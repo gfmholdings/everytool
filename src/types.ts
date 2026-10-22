@@ -47,6 +47,11 @@ export interface Countdown {
   /** Local-midnight date of the event, ms since epoch. */
   date: number;
   createdAt: number;
+  /**
+   * When true, today counts as day 1 (Between counts both ends).
+   * Missing on older saved rows, which keep the original exclusive count.
+   */
+  includeToday?: boolean;
 }
 
 /** What the QR encodes. Stored with every generated code. */

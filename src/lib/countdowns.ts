@@ -25,9 +25,16 @@ export function addCountdown(
   date: Date,
   now: number = Date.now(),
   id: string = `cd-${now.toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+  includeToday = false,
 ): AppState {
   const t = title.trim() || 'Countdown';
-  const item: Countdown = { id, title: t.slice(0, 60), date: localMidnight(date), createdAt: now };
+  const item: Countdown = {
+    id,
+    title: t.slice(0, 60),
+    date: localMidnight(date),
+    createdAt: now,
+    includeToday: includeToday === true,
+  };
   return { ...state, countdowns: [...state.countdowns, item].slice(-MAX_COUNTDOWNS) };
 }
 
@@ -48,13 +55,27 @@ export function nextCountdown(list: Countdown[], today: Date = new Date()): Coun
   return sortCountdowns(list, today).find((c) => c.date >= localMidnight(today)) ?? null;
 }
 
-export function daysLeft(c: Countdown, today: Date = new Date()): number {
-  return daysBetween(today, new Date(c.date));
+/** Same sign rule as dates.ts countedDays. Kept local so tests can load this file alone. */
+function withInclude(diff: number, includeToday: boolean): number {
+  if (!includeToday) return diff;
+  if (diff > 0) return diff + 1;
+  if (diff < 0) return diff - 1;
+  return 1;
 }
 
-export function describeDaysLeft(n: number): string {
+export function daysLeft(c: Countdown, today: Date = new Date()): number {
+  return withInclude(daysBetween(today, new Date(c.date)), c.includeToday === true);
+}
+
+/**
+ * `n` is the exclusive midnight difference. includeToday uses the same
+ * +1 rule as the big number, and still calls a same-day target Today.
+ */
+export function describeDaysLeft(n: number, includeToday = false): string {
   if (n === 0) return 'Today';
-  if (n === 1) return 'Tomorrow';
-  if (n > 0) return `${n} days to go`;
-  return n === -1 ? 'Yesterday' : `${-n} days ago`;
+  if (!includeToday && n === 1) return 'Tomorrow';
+  if (!includeToday && n === -1) return 'Yesterday';
+  const shown = withInclude(n, includeToday);
+  if (shown > 0) return `${shown} days to go`;
+  return `${-shown} days ago`;
 }

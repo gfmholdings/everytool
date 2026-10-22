@@ -81,9 +81,18 @@ test('countdowns: soonest upcoming first, widget picks it, past later', () => {
   assert.deepEqual(sortCountdowns(s.countdowns, today).map((c) => c.id), ['bday', 'trip', 'old']);
   assert.equal(nextCountdown(s.countdowns, today)?.id, 'bday');
   assert.equal(daysLeft(s.countdowns.find((c) => c.id === 'bday')!, today), 5);
+  assert.equal(s.countdowns[0]?.includeToday, false);
   assert.equal(describeDaysLeft(0), 'Today');
   assert.equal(describeDaysLeft(1), 'Tomorrow');
   assert.equal(describeDaysLeft(-3), '3 days ago');
+  const included = addCountdown(empty, 'Jan 30', new Date(2027, 0, 30), 4, 'jan', true);
+  const saved = included.countdowns[0]!;
+  assert.equal(saved.includeToday, true);
+  assert.equal(daysLeft(saved, new Date(2026, 9, 22)), 101);
+  assert.equal(describeDaysLeft(100, true), '101 days to go');
+  assert.equal(describeDaysLeft(0, true), 'Today');
+  const legacy = { ...saved, includeToday: undefined };
+  assert.equal(daysLeft(legacy, new Date(2026, 9, 22)), 100);
   s = deleteCountdown(s, 'bday');
   assert.equal(nextCountdown(s.countdowns, today)?.id, 'trip');
   assert.equal(nextCountdown(deleteCountdown(s, 'trip').countdowns, today), null);

@@ -26,7 +26,7 @@ interface StoreApi {
   updateClip: (id: string, text: string) => void;
   /** Returns a problem in plain words, or null when saved. */
   setClipShortcut: (id: string, shortcut: string) => string | null;
-  addCountdown: (title: string, date: Date) => void;
+  addCountdown: (title: string, date: Date, includeToday?: boolean) => void;
   deleteCountdown: (id: string) => void;
   togglePin: (id: string) => void;
   deleteClip: (id: string) => void;
@@ -151,8 +151,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         commit((s) => ops.setShortcut(s, id, shortcut));
         return null;
       },
-      addCountdown: (title, date) => {
-        commit((s) => addCd(s, title, date));
+      addCountdown: (title, date, includeToday = false) => {
+        commit((s) => addCd(s, title, date, Date.now(), undefined, includeToday));
         reloadWidgets();
       },
       deleteCountdown: (id) => {

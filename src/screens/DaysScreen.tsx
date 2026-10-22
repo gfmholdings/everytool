@@ -1,10 +1,10 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useMemo, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Switch, Text, useColorScheme, View } from 'react-native';
 
 import { Card, Field, PrimaryButton, Segmented, ToolShell } from '../components/ui';
 import { daysLeft, describeDaysLeft, sortCountdowns } from '../lib/countdowns';
-import { breakdownYMD, daysBetween, formatBreakdown } from '../lib/dates';
+import { countedBreakdown, countedDays, daysBetween, formatBreakdown } from '../lib/dates';
 import { useStore } from '../store/AppStore';
 import { colors, type } from '../theme';
 
@@ -48,9 +48,17 @@ export function DaysScreen({
   const [to, setTo] = useState<Date>(() => plusDays(today, 30));
   const [target, setTarget] = useState<Date>(() => plusDays(today, 100));
   const [birth, setBirth] = useState<Date>(() => plusDays(today, -365 * 25));
+  const [includeBetween, setIncludeBetween] = useState(false);
+  const [includeUntil, setIncludeUntil] = useState(false);
   const [openPicker, setOpenPicker] = useState<
     'from' | 'to' | 'target' | 'birth' | null
   >(null);
+  // The screen chrome is light gray. An inline UIDatePicker with an
+  // unspecified style follows a dark trait and paints the month title,
+  // weekday headers, and day numbers white. Pin the picker to the real
+  // scheme and sit it on a card of that same scheme.
+  const scheme = useColorScheme();
+  const pickerVariant = scheme === 'dark' ? 'dark' : 'light';
 
   const dateField = (
     label: string,
@@ -66,21 +74,27 @@ export function DaysScreen({
         </Card>
       </Pressable>
       {openPicker === key && (
-        <DateTimePicker
-          value={value}
-          mode="date"
-          display={Platform.OS === 'ios' ? 'inline' : 'default'}
-          onChange={(_e, d) => {
-            if (d) set(startOfDay(d));
-            if (Platform.OS !== 'ios') setOpenPicker(null);
-          }}
-        />
+        <View style={[styles.pickerCard, pickerVariant === 'dark' && styles.pickerCardDark]}>
+          <DateTimePicker
+            value={value}
+            mode="date"
+            display={Platform.OS === 'ios' ? 'inline' : 'default'}
+            themeVariant={pickerVariant}
+            accentColor={colors.accent}
+            style={styles.picker}
+            onChange={(_e, d) => {
+              if (d) set(startOfDay(d));
+              if (Platform.OS !== 'ios') setOpenPicker(null);
+            }}
+          />
+        </View>
       )}
     </View>
   );
 
-  const between = daysBetween(from, to);
-  const until = daysBetween(today, target);
+  const between = countedDays(from, to, includeBetween);
+  const untilRaw = daysBetween(today, target);
+  const until = countedDays(today, target, includeUntil);
   const age = daysBetween(birth, today);
 
   return (
@@ -103,8 +117,9 @@ export function DaysScreen({
             <Text style={type.numBig}>{Math.abs(between)}</Text>
             <Text style={type.small}>days</Text>
             <Text style={[type.body, styles.breakdown]}>
-              {formatBreakdown(breakdownYMD(from, to))}
+              {formatBreakdown(countedBreakdown(from, to, includeBetween))}
             </Text>
+            <IncludeToday value={includeBetween} onChange={setIncludeBetween} />
           </Card>
         </>
       )}
@@ -115,11 +130,12 @@ export function DaysScreen({
           <Card style={styles.result}>
             <Text style={type.numBig}>{Math.abs(until)}</Text>
             <Text style={type.small}>
-              {until > 0 ? 'days to go' : until < 0 ? 'days ago' : 'today'}
+              {untilRaw === 0 ? 'today' : untilRaw > 0 ? 'days to go' : 'days ago'}
             </Text>
             <Text style={[type.body, styles.breakdown]}>
-              {formatBreakdown(breakdownYMD(today, target))}
+              {formatBreakdown(countedBreakdown(today, target, includeUntil))}
             </Text>
+            <IncludeToday value={includeUntil} onChange={setIncludeUntil} />
           </Card>
           <Field
             value={title}
@@ -130,7 +146,7 @@ export function DaysScreen({
           <PrimaryButton
             label="Save as countdown"
             onPress={() => {
-              addCountdown(title, target);
+              addCountdown(title, target, includeUntil);
               setTitle('');
               notify?.('Countdown saved — add the Countdown widget to see it at a glance');
             }}
@@ -140,6 +156,7 @@ export function DaysScreen({
             <>
               <Text style={type.label}>Your countdowns</Text>
               {sortCountdowns(state.countdowns, today).map((c) => {
+                const raw = daysBetween(today, new Date(c.date));
                 const n = daysLeft(c, today);
                 return (
                   <Card key={c.id} style={styles.cdRow}>
@@ -148,7 +165,7 @@ export function DaysScreen({
                         {c.title}
                       </Text>
                       <Text style={type.small}>
-                        {fmt(new Date(c.date))} · {describeDaysLeft(n)}
+                        {fmt(new Date(c.date))} · {describeDaysLeft(raw, c.includeToday === true)}
                       </Text>
                     </View>
                     <Text style={[type.num, n < 0 && { color: colors.faint }]}>{Math.abs(n)}</Text>
@@ -178,7 +195,7 @@ export function DaysScreen({
             <Text style={type.numBig}>{age}</Text>
             <Text style={type.small}>days old</Text>
             <Text style={[type.body, styles.breakdown]}>
-              {formatBreakdown(breakdownYMD(birth, today))}
+              {formatBreakdown(countedBreakdown(birth, today))}
             </Text>
           </Card>
         </>
@@ -187,10 +204,47 @@ export function DaysScreen({
   );
 }
 
+function IncludeToday({
+  value,
+  onChange,
+}: {
+  value: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <View style={styles.includeRow}>
+      <Text style={type.body}>Include today</Text>
+      <Switch
+        accessibilityLabel="Include today"
+        value={value}
+        onValueChange={onChange}
+        trackColor={{ false: colors.border, true: colors.accent }}
+      />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   dateCard: { marginTop: 6, paddingVertical: 14 },
+  pickerCard: {
+    backgroundColor: colors.card,
+    borderRadius: 18,
+    overflow: 'hidden',
+  },
+  pickerCardDark: { backgroundColor: '#1C1C1E' },
+  picker: { width: '100%' },
   result: { alignItems: 'center', gap: 2, paddingVertical: 22 },
   breakdown: { marginTop: 6 },
+  includeRow: {
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
   cdRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12 },
   cdMain: { flex: 1, gap: 2 },
   cdDelete: { fontSize: 16, color: colors.faint, paddingHorizontal: 4 },

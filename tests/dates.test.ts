@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { breakdownYMD, daysBetween, formatBreakdown } from '../src/lib/dates.ts';
+import {
+  breakdownYMD,
+  countedBreakdown,
+  countedDays,
+  daysBetween,
+  formatBreakdown,
+} from '../src/lib/dates.ts';
 
 const d = (y: number, m: number, day: number) => new Date(y, m - 1, day);
 
@@ -52,6 +58,45 @@ test('breakdown across years and reversed order', () => {
   const fwd = breakdownYMD(d(2026, 1, 31), d(2026, 3, 1));
   const rev = breakdownYMD(d(2026, 3, 1), d(2026, 1, 31));
   assert.deepEqual(rev, fwd);
+});
+
+test('include today counts both ends, including the owner Until example', () => {
+  // 22 Oct 2026 → 30 Jan 2027 is 100 midnights. Counting today makes it 101.
+  const today = d(2026, 10, 22);
+  const jan30 = d(2027, 1, 30);
+  assert.equal(countedDays(today, jan30, false), 100);
+  assert.equal(countedDays(today, jan30, true), 101);
+  assert.equal(formatBreakdown(countedBreakdown(today, jan30, false)), '3 months 8 days');
+  assert.equal(formatBreakdown(countedBreakdown(today, jan30, true)), '3 months 9 days');
+  // Between counts the start date and the end date.
+  assert.equal(countedDays(d(2026, 1, 1), d(2026, 1, 3), true), 3);
+  assert.equal(countedDays(today, today, true), 1);
+  assert.equal(countedDays(today, today, false), 0);
+  assert.equal(formatBreakdown(countedBreakdown(today, today, true)), '1 day');
+  // A past target stays negative and also includes both ends.
+  assert.equal(countedDays(jan30, today, true), -101);
+  assert.deepEqual(countedBreakdown(jan30, today, true), countedBreakdown(today, jan30, true));
+});
+
+test('include today stays exact across DST and leap years', () => {
+  // Spring forward 2026-03-08 and fall back 2026-11-01. Times are not
+  // midnight, so a raw millisecond divide would slip; the calendar count does not.
+  const springBefore = new Date(2026, 2, 7, 23, 30);
+  const springAfter = new Date(2026, 2, 9, 0, 30);
+  assert.equal(daysBetween(springBefore, springAfter), 2);
+  assert.equal(countedDays(springBefore, springAfter, true), 3);
+  const fallBefore = new Date(2026, 10, 1, 1, 30);
+  const fallAfter = new Date(2026, 10, 2, 1, 30);
+  assert.equal(daysBetween(fallBefore, fallAfter), 1);
+  assert.equal(countedDays(fallBefore, fallAfter, true), 2);
+  assert.equal(formatBreakdown(countedBreakdown(fallBefore, fallAfter, false)), '1 day');
+  assert.equal(formatBreakdown(countedBreakdown(fallBefore, fallAfter, true)), '2 days');
+  // 2024 has Feb 29. 2025 does not.
+  assert.equal(countedDays(d(2024, 2, 28), d(2024, 3, 1), false), 2);
+  assert.equal(countedDays(d(2024, 2, 28), d(2024, 3, 1), true), 3);
+  assert.equal(countedDays(d(2025, 2, 28), d(2025, 3, 1), false), 1);
+  assert.equal(countedDays(d(2025, 2, 28), d(2025, 3, 1), true), 2);
+  assert.equal(countedDays(d(2024, 2, 29), d(2025, 2, 28), true), 366);
 });
 
 test('formatBreakdown words', () => {
