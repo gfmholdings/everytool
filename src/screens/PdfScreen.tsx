@@ -12,9 +12,11 @@ import {
   extractPdfPages,
   mergePdfSources,
   pdfSourceFromUri,
+  scannedPagesToPdf,
   type PdfResult,
   type PdfSource,
 } from '../lib/pdf';
+import { scanDocumentPages } from '../store/sharedVault';
 import { specToIndices } from '../lib/pages';
 import { colors, type } from '../theme';
 
@@ -63,6 +65,31 @@ export function PdfScreen({
     }
     setSources((s) => [...s, ...added]);
     setResult(null);
+  };
+
+  const scanToPdf = async () => {
+    if (busy) return;
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      setError('Camera access is off in Settings.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const pages = await scanDocumentPages();
+      if (pages == null) {
+        setError('This build can’t open the document scanner. Update Everytool and try again.');
+        return;
+      }
+      if (pages.length === 0) return;
+      setResult(await scannedPagesToPdf(pages));
+      notify('Scanned on this phone.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Couldn’t scan that.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const addPhotos = async () => {
@@ -183,6 +210,7 @@ export function PdfScreen({
           <PrimaryButton label="Add photos" onPress={addPhotos} />
         </View>
       </View>
+      <GhostButton label={busy ? 'Working…' : 'Scan to PDF'} onPress={() => void scanToPdf()} />
 
       {mode === 'split' && sources[0] && (
         <>

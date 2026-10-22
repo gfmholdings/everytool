@@ -6,6 +6,7 @@ import ReplayKit
 import UIKit
 import UserNotifications
 import Vision
+import VisionKit
 import WidgetKit
 
 /// The shared App Group store. The app, keyboard, share extension and
@@ -19,6 +20,9 @@ public class EverytoolSharedVaultModule: Module {
   /// call. The picker is the only public way to start a ReplayKit
   /// broadcast from inside an app.
   private var picker: RPSystemBroadcastPickerView?
+  /// Kept for the lifetime of Apple's document camera or live-text scanner.
+  private var documentScan: DocumentScanCoordinator?
+  private var liveTextScan: LiveTextCoordinator?
 
   public func definition() -> ModuleDefinition {
     Name("EverytoolSharedVault")
@@ -93,7 +97,8 @@ public class EverytoolSharedVaultModule: Module {
       }
       let request = VNRecognizeTextRequest()
       request.recognitionLevel = .accurate
-      request.usesLanguageCorrection = false
+      request.usesLanguageCorrection = true
+      request.revision = VNRecognizeTextRequest.currentRevision
       let handler = VNImageRequestHandler(cgImage: image, orientation: orientation, options: [:])
       try handler.perform([request])
       let observations = request.results ?? []
@@ -255,6 +260,27 @@ public class EverytoolSharedVaultModule: Module {
       try await sampleVideoFrames(videoUri: videoUri, timesMs: timesMs, maxWidth: maxWidth)
     }
 
+    /// VisionKit document camera: edge detect, perspective crop, several
+    /// pages. Each page is a JPEG in tmp. An empty list means Cancel.
+    /// The same call feeds Split bill and Scan to PDF.
+    AsyncFunction("scanDocuments") { (promise: Promise) in
+      DispatchQueue.main.async {
+        self.beginDocumentScan(promise)
+      }
+    }
+
+    /// DataScanner live text. Optional: only some devices support it.
+    Function("liveTextSupported") { () -> Bool in
+      DataScannerViewController.isSupported && DataScannerViewController.isAvailable
+    }
+
+    /// Live text over the camera. Boxes match recognizeText. Empty means Cancel.
+    AsyncFunction("scanLiveText") { (promise: Promise) in
+      DispatchQueue.main.async {
+        self.beginLiveText(promise)
+      }
+    }
+
     /// Lets the broadcast extension post "Your long screenshot is ready"
     /// when the recording stops. Optional — stitching works without it.
     AsyncFunction("requestNotificationPermission") { () async -> Bool in
@@ -262,6 +288,236 @@ public class EverytoolSharedVaultModule: Module {
       let granted = try? await center.requestAuthorization(options: [.alert, .sound])
       return granted ?? false
     }
+  }
+
+  private func beginDocumentScan(_ promise: Promise) {
+    guard let presenter = topPresenter() else {
+      promise.reject("ERR_SCAN", "Open Everytool and try the scanner again.")
+      return
+    }
+    let coordinator = DocumentScanCoordinator(
+      onFinish: { [weak self] uris in
+        self?.documentScan = nil
+        promise.resolve(uris)
+      },
+      onFail: { [weak self] message in
+        self?.documentScan = nil
+        promise.reject("ERR_SCAN", message)
+      }
+    )
+    documentScan = coordinator
+    let camera = VNDocumentCameraViewController()
+    camera.delegate = coordinator
+    presenter.present(camera, animated: true)
+  }
+
+  private func beginLiveText(_ promise: Promise) {
+    guard DataScannerViewController.isSupported, DataScannerViewController.isAvailable else {
+      promise.reject("ERR_LIVE_TEXT", "Live text isn’t available on this iPhone.")
+      return
+    }
+    guard let presenter = topPresenter() else {
+      promise.reject("ERR_LIVE_TEXT", "Open Everytool and try live text again.")
+      return
+    }
+    let scanner = DataScannerViewController(
+      recognizedDataTypes: [.text()],
+      qualityLevel: .accurate,
+      recognizesMultipleItems: true,
+      isHighFrameRateTrackingEnabled: false,
+      isPinchToZoomEnabled: true,
+      isGuidanceEnabled: true,
+      isHighlightingEnabled: true
+    )
+    let coordinator = LiveTextCoordinator(
+      scanner: scanner,
+      onFinish: { [weak self] boxes in
+        self?.liveTextScan = nil
+        promise.resolve(boxes)
+      },
+      onFail: { [weak self] message in
+        self?.liveTextScan = nil
+        promise.reject("ERR_LIVE_TEXT", message)
+      }
+    )
+    scanner.delegate = coordinator
+    liveTextScan = coordinator
+    presenter.present(scanner, animated: true) {
+      coordinator.installButtons()
+      do {
+        try scanner.startScanning()
+      } catch {
+        scanner.dismiss(animated: true) {
+          self.liveTextScan = nil
+          promise.reject("ERR_LIVE_TEXT", error.localizedDescription)
+        }
+      }
+    }
+  }
+}
+
+private func topPresenter() -> UIViewController? {
+  let scene = UIApplication.shared.connectedScenes
+    .compactMap { $0 as? UIWindowScene }
+    .first { $0.activationState == .foregroundActive }
+  let window = (scene?.windows ?? []).first { $0.isKeyWindow } ?? scene?.windows.first
+  var controller = window?.rootViewController
+  while let presented = controller?.presentedViewController {
+    controller = presented
+  }
+  return controller
+}
+
+/// Apple's document camera. Pages are perspective-corrected JPEGs.
+final class DocumentScanCoordinator: NSObject, VNDocumentCameraViewControllerDelegate {
+  private let onFinish: ([String]) -> Void
+  private let onFail: (String) -> Void
+
+  init(onFinish: @escaping ([String]) -> Void, onFail: @escaping (String) -> Void) {
+    self.onFinish = onFinish
+    self.onFail = onFail
+  }
+
+  func documentCameraViewController(
+    _ controller: VNDocumentCameraViewController,
+    didFinishWith scan: VNDocumentCameraScan
+  ) {
+    let uris = writeScanPages(scan)
+    controller.dismiss(animated: true) { self.onFinish(uris) }
+  }
+
+  func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) {
+    controller.dismiss(animated: true) { self.onFinish([]) }
+  }
+
+  func documentCameraViewController(
+    _ controller: VNDocumentCameraViewController,
+    didFailWithError error: Error
+  ) {
+    controller.dismiss(animated: true) { self.onFail(error.localizedDescription) }
+  }
+}
+
+private func writeScanPages(_ scan: VNDocumentCameraScan) -> [String] {
+  let dir = FileManager.default.temporaryDirectory
+    .appendingPathComponent("everytool-scan-\(UUID().uuidString)", isDirectory: true)
+  do {
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+  } catch {
+    return []
+  }
+  var uris: [String] = []
+  for index in 0..<scan.pageCount {
+    let image = scan.imageOfPage(at: index)
+    guard let data = image.jpegData(compressionQuality: 0.92) else { continue }
+    let url = dir.appendingPathComponent("page-\(index + 1).jpg")
+    do {
+      try data.write(to: url, options: .atomic)
+      uris.append(url.absoluteString)
+    } catch {
+      continue
+    }
+  }
+  return uris
+}
+
+/// Optional live text. The user holds the receipt in frame and taps Use this text.
+final class LiveTextCoordinator: NSObject, DataScannerViewControllerDelegate {
+  private let onFinish: ([[String: Any]]) -> Void
+  private let onFail: (String) -> Void
+  private weak var scanner: DataScannerViewController?
+  private var items: [RecognizedItem] = []
+  private var settled = false
+
+  init(
+    scanner: DataScannerViewController,
+    onFinish: @escaping ([[String: Any]]) -> Void,
+    onFail: @escaping (String) -> Void
+  ) {
+    self.scanner = scanner
+    self.onFinish = onFinish
+    self.onFail = onFail
+  }
+
+  func installButtons() {
+    guard let view = scanner?.view else { return }
+    let use = UIButton(type: .system)
+    use.setTitle("Use this text", for: .normal)
+    use.setTitleColor(.white, for: .normal)
+    use.titleLabel?.font = .boldSystemFont(ofSize: 17)
+    use.backgroundColor = UIColor(red: 245 / 255, green: 134 / 255, blue: 31 / 255, alpha: 1)
+    use.layer.cornerRadius = 14
+    use.frame = CGRect(x: 20, y: view.bounds.height - 96, width: view.bounds.width - 40, height: 50)
+    use.autoresizingMask = [.flexibleWidth, .flexibleTopMargin]
+    use.addTarget(self, action: #selector(useText), for: .touchUpInside)
+    view.addSubview(use)
+
+    let cancel = UIButton(type: .system)
+    cancel.setTitle("Cancel", for: .normal)
+    cancel.setTitleColor(.white, for: .normal)
+    cancel.titleLabel?.font = .boldSystemFont(ofSize: 17)
+    cancel.frame = CGRect(x: 20, y: view.safeAreaInsets.top + 8, width: 80, height: 36)
+    cancel.autoresizingMask = [.flexibleRightMargin, .flexibleBottomMargin]
+    cancel.addTarget(self, action: #selector(cancelScan), for: .touchUpInside)
+    view.addSubview(cancel)
+  }
+
+  func dataScanner(
+    _ dataScanner: DataScannerViewController,
+    didAdd addedItems: [RecognizedItem],
+    allItems: [RecognizedItem]
+  ) {
+    items = allItems
+  }
+
+  func dataScanner(
+    _ dataScanner: DataScannerViewController,
+    didUpdate updatedItems: [RecognizedItem],
+    allItems: [RecognizedItem]
+  ) {
+    items = allItems
+  }
+
+  func dataScanner(
+    _ dataScanner: DataScannerViewController,
+    didRemove removedItems: [RecognizedItem],
+    allItems: [RecognizedItem]
+  ) {
+    items = allItems
+  }
+
+  @objc private func useText() {
+    finish(boxes(from: items))
+  }
+
+  @objc private func cancelScan() {
+    finish([])
+  }
+
+  private func finish(_ boxes: [[String: Any]]) {
+    guard !settled else { return }
+    settled = true
+    scanner?.stopScanning()
+    scanner?.dismiss(animated: true) { self.onFinish(boxes) }
+  }
+}
+
+private func boxes(from items: [RecognizedItem]) -> [[String: Any]] {
+  items.compactMap { item -> [String: Any]? in
+    guard case .text(let text) = item else { return nil }
+    let quad = text.bounds
+    let xs = [quad.topLeft.x, quad.topRight.x, quad.bottomLeft.x, quad.bottomRight.x]
+    let ys = [quad.topLeft.y, quad.topRight.y, quad.bottomLeft.y, quad.bottomRight.y]
+    guard let minX = xs.min(), let maxX = xs.max(), let minY = ys.min(), let maxY = ys.max() else {
+      return nil
+    }
+    return [
+      "text": text.transcript,
+      "x": Double(minX),
+      "y": Double(1 - maxY),
+      "width": Double(maxX - minX),
+      "height": Double(maxY - minY),
+    ]
   }
 }
 

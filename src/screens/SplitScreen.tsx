@@ -5,8 +5,14 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Card, Field, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
 import { shareText } from '../lib/files';
 import { evenBillShareText, formatMoney, itemBillShareText, splitBill, toCents } from '../lib/money';
-import { linesFromBoxes, parseReceipt, splitByItems, type ReceiptItem } from '../lib/receipt';
-import { recognizeText } from '../store/sharedVault';
+import {
+  mergeParsedReceipts,
+  parseReceiptBoxes,
+  splitByItems,
+  type ParsedReceipt,
+  type ReceiptItem,
+} from '../lib/receipt';
+import { liveTextSupported, recognizeText, scanDocumentPages, scanLiveText } from '../store/sharedVault';
 import { colors, type } from '../theme';
 
 const PERSON = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -25,6 +31,11 @@ export function SplitScreen({ onBack }: { onBack: () => void }) {
   const [newPrice, setNewPrice] = useState('');
   const [scanNote, setScanNote] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [draftName, setDraftName] = useState('');
+  const [draftPrice, setDraftPrice] = useState('');
+  const [liveText] = useState(() => liveTextSupported());
   const [totalStr, setTotalStr] = useState('');
   const [taxStr, setTaxStr] = useState('');
   const [tipPct, setTipPct] = useState(18);
@@ -59,51 +70,98 @@ export function SplitScreen({ onBack }: { onBack: () => void }) {
     [items, assign, people, taxStr, effectiveTip],
   );
 
-  const scanReceipt = async (source: 'camera' | 'library') => {
-    setScanNote(null);
-    const perm =
-      source === 'camera'
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      setScanNote(source === 'camera' ? 'Camera access is off in Settings.' : 'Photo access is off in Settings.');
+  const applyParsed = (parsed: ParsedReceipt) => {
+    if (parsed.items.length === 0) {
+      setScanNote('No prices found. Try a flatter, closer photo — or add items by hand below.');
       return;
     }
-    const res =
-      source === 'camera'
-        ? await ImagePicker.launchCameraAsync({ quality: 1 })
-        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
-    if (res.canceled || !res.assets[0]) return;
+    setItems(parsed.items);
+    setAssign(parsed.items.map(() => []));
+    setReviewing(true);
+    setEditing(null);
+    if (parsed.taxCents != null) setTaxStr((parsed.taxCents / 100).toFixed(2));
+    if (parsed.tipCents != null && parsed.tipCents > 0) {
+      const sum = parsed.items.reduce((a, b) => a + b.cents, 0);
+      if (sum > 0) setCustomTip(((parsed.tipCents / sum) * 100).toFixed(1));
+    }
+    const itemsSum = parsed.items.reduce((a, b) => a + b.cents, 0);
+    setScanNote(
+      parsed.totalCents != null &&
+        Math.abs(itemsSum + (parsed.taxCents ?? 0) + (parsed.tipCents ?? 0) - parsed.totalCents) > 1
+        ? `Read ${parsed.items.length} items. The receipt total is ${formatMoney(parsed.totalCents)} — check the items match.`
+        : `Read ${parsed.items.length} items — on this phone, nothing uploaded.`,
+    );
+  };
+
+  const readUris = async (uris: string[]) => {
     setScanning(true);
     try {
-      const boxes = await recognizeText(res.assets[0].uri);
-      if (!boxes) {
-        setScanNote('Receipt reading needs the installed Everytool app.');
-        return;
+      const pages: ParsedReceipt[] = [];
+      for (const uri of uris) {
+        const boxes = await recognizeText(uri);
+        if (!boxes) {
+          setScanNote('Receipt reading needs the installed Everytool app.');
+          return;
+        }
+        pages.push(parseReceiptBoxes(boxes));
       }
-      const parsed = parseReceipt(linesFromBoxes(boxes));
-      if (parsed.items.length === 0) {
-        setScanNote('No prices found. Try a flatter, closer photo — or add items by hand below.');
-        return;
-      }
-      setItems(parsed.items);
-      setAssign(parsed.items.map(() => []));
-      if (parsed.taxCents != null) setTaxStr((parsed.taxCents / 100).toFixed(2));
-      if (parsed.tipCents != null && parsed.tipCents > 0) {
-        const sum = parsed.items.reduce((a, b) => a + b.cents, 0);
-        if (sum > 0) setCustomTip(((parsed.tipCents / sum) * 100).toFixed(1));
-      }
-      const itemsSum = parsed.items.reduce((a, b) => a + b.cents, 0);
-      setScanNote(
-        parsed.totalCents != null &&
-          Math.abs(itemsSum + (parsed.taxCents ?? 0) + (parsed.tipCents ?? 0) - parsed.totalCents) > 1
-          ? `Read ${parsed.items.length} items. The receipt total is ${formatMoney(parsed.totalCents)} — check the items match.`
-          : `Read ${parsed.items.length} items — on this phone, nothing uploaded.`,
-      );
+      applyParsed(mergeParsedReceipts(pages));
     } catch {
       setScanNote('Couldn’t read that receipt.');
     } finally {
       setScanning(false);
+    }
+  };
+
+  const scanReceipt = async () => {
+    setScanNote(null);
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      setScanNote('Camera access is off in Settings.');
+      return;
+    }
+    try {
+      const pages = await scanDocumentPages();
+      if (pages == null) {
+        setScanNote('This build can’t open the receipt scanner. Update Everytool and try again.');
+        return;
+      }
+      if (pages.length === 0) return;
+      await readUris(pages);
+    } catch {
+      setScanNote('Couldn’t open the receipt scanner.');
+    }
+  };
+
+  const scanFromPhoto = async () => {
+    setScanNote(null);
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      setScanNote('Photo access is off in Settings.');
+      return;
+    }
+    const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
+    if (res.canceled || !res.assets[0]) return;
+    await readUris([res.assets[0].uri]);
+  };
+
+  const scanLive = async () => {
+    setScanNote(null);
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      setScanNote('Camera access is off in Settings.');
+      return;
+    }
+    try {
+      const boxes = await scanLiveText();
+      if (boxes == null) {
+        setScanNote('This build can’t open live text. Update Everytool and try again.');
+        return;
+      }
+      if (boxes.length === 0) return;
+      applyParsed(parseReceiptBoxes(boxes));
+    } catch {
+      setScanNote('Live text isn’t available on this iPhone.');
     }
   };
 
@@ -146,16 +204,20 @@ export function SplitScreen({ onBack }: { onBack: () => void }) {
             <View style={styles.half}>
               <PrimaryButton
                 label={scanning ? 'Reading…' : 'Scan receipt'}
-                onPress={() => void scanReceipt('camera')}
+                onPress={() => void scanReceipt()}
                 disabled={scanning}
               />
             </View>
             <View style={styles.half}>
-              <GhostButton label="From a photo" onPress={() => void scanReceipt('library')} />
+              <GhostButton label="From a photo" onPress={() => void scanFromPhoto()} />
             </View>
           </View>
+          {liveText && <GhostButton label="Live text" onPress={() => void scanLive()} />}
           {!!scanNote && <Text style={type.small}>{scanNote}</Text>}
-          {items.length > 0 && (
+          {reviewing && items.length > 0 && (
+            <Text style={type.small}>Check the names and prices, then assign them.</Text>
+          )}
+          {items.length > 0 && !reviewing && (
             <Text style={type.small}>
               Tap the people who shared each item. No one tapped = everyone shares it.
             </Text>
@@ -167,10 +229,48 @@ export function SplitScreen({ onBack }: { onBack: () => void }) {
                   {item.name}
                 </Text>
                 <Text style={type.numSmall}>{formatMoney(item.cents)}</Text>
+                {reviewing && (
+                  <Pressable
+                    onPress={() => {
+                      setEditing(k);
+                      setDraftName(item.name);
+                      setDraftPrice((item.cents / 100).toFixed(2));
+                    }}
+                    hitSlop={8}
+                    accessibilityLabel={`Edit ${item.name}`}
+                  >
+                    <Text style={styles.edit}>Edit</Text>
+                  </Pressable>
+                )}
                 <Pressable onPress={() => removeItem(k)} hitSlop={8} accessibilityLabel={`Remove ${item.name}`}>
                   <Text style={styles.remove}>✕</Text>
                 </Pressable>
               </View>
+              {editing === k && (
+                <View style={styles.row}>
+                  <View style={styles.flex2}>
+                    <Field value={draftName} onChange={setDraftName} placeholder="Item" />
+                  </View>
+                  <View style={styles.flex}>
+                    <Field value={draftPrice} onChange={setDraftPrice} placeholder="$" keyboard="decimal-pad" />
+                  </View>
+                  <Pressable
+                    onPress={() => {
+                      const cents = toCents(Number.parseFloat(draftPrice) || 0);
+                      const name = draftName.trim();
+                      if (name && cents > 0) {
+                        setItems((all) => all.map((it, i) => (i === k ? { name, cents } : it)));
+                      }
+                      setEditing(null);
+                    }}
+                    hitSlop={8}
+                    accessibilityLabel={`Save ${item.name}`}
+                  >
+                    <Text style={styles.edit}>Done</Text>
+                  </Pressable>
+                </View>
+              )}
+              {!reviewing && (
               <View style={styles.chips}>
                 {Array.from({ length: people }, (_, p) => {
                   const on = (assign[k] ?? []).includes(p);
@@ -188,8 +288,18 @@ export function SplitScreen({ onBack }: { onBack: () => void }) {
                   );
                 })}
               </View>
+              )}
             </Card>
           ))}
+          {reviewing && items.length > 0 && (
+            <PrimaryButton
+              label="Assign these"
+              onPress={() => {
+                setReviewing(false);
+                setEditing(null);
+              }}
+            />
+          )}
           <View style={styles.row}>
             <View style={styles.flex2}>
               <Field value={newName} onChange={setNewName} placeholder="Item" testID="split.itemName" />
@@ -354,6 +464,7 @@ const styles = StyleSheet.create({
   itemCard: { gap: 8, paddingVertical: 12 },
   itemTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   remove: { fontSize: 15, color: colors.faint, paddingHorizontal: 4 },
+  edit: { fontSize: 15, fontWeight: '700', color: colors.accent, paddingHorizontal: 4 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: {
     minWidth: 36,

@@ -25,6 +25,9 @@ interface SharedVaultNative {
   writeGroupString?(groupId: string, key: string, value: string | null): boolean;
   reloadWidgets?(): void;
   recognizeText?(uri: string): Promise<TextBox[]>;
+  scanDocuments?(): Promise<string[]>;
+  liveTextSupported?(): boolean;
+  scanLiveText?(): Promise<TextBox[]>;
   stripLocation?(inputUri: string, outputUri: string): boolean;
   imageHasLocation?(uri: string): boolean;
   reencodeImage?(
@@ -171,6 +174,30 @@ export function reloadWidgets(): void {
 export async function recognizeText(uri: string): Promise<TextBox[] | null> {
   if (!native?.recognizeText) return null;
   return native.recognizeText(uri);
+}
+
+/**
+ * VisionKit document camera. null when this binary has no scanner.
+ * An empty list is Cancel. Pages are cropped JPEGs, in order.
+ */
+export async function scanDocumentPages(): Promise<string[] | null> {
+  if (!native?.scanDocuments) return null;
+  return native.scanDocuments();
+}
+
+/** True when this iPhone can run DataScanner live text. */
+export function liveTextSupported(): boolean {
+  try {
+    return native?.liveTextSupported?.() ?? false;
+  } catch {
+    return false;
+  }
+}
+
+/** Optional live text. null when the binary has no scanner. Empty is Cancel. */
+export async function scanLiveText(): Promise<TextBox[] | null> {
+  if (!native?.scanLiveText) return null;
+  return native.scanLiveText();
 }
 
 /** Lossless copy without GPS/XMP. false when unavailable or failed. */

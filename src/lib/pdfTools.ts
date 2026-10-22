@@ -1,5 +1,7 @@
 // Extra PDF operations. Pure pdf-lib and plain rules, so they run in Node.
-// Nothing here is wired to a screen, and nothing talks to the network.
+// Scan to PDF on the PDF screen is the exception: the shared VisionKit
+// document scanner crops the pages, then imagesToPdfBytes lays them out.
+// Nothing here talks to the network.
 //
 // On the phone the pixels, the camera, passwords, and OCR belong to
 // PDFKit, CoreGraphics, VisionKit, Vision, and ImageIO. This module is

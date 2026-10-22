@@ -11,6 +11,7 @@ import {
   type JpegReencoder,
   type PdfOutput,
 } from './pdfCore';
+import { imagesToPdfBytes, SCAN_TO_PDF } from './pdfTools';
 
 // File I/O around the pure, unit-tested PDF operations in pdfCore.ts.
 
@@ -54,6 +55,19 @@ function writeResult(out: PdfOutput, shrunk?: boolean): PdfResult {
   const uri = tempFileUri('pdf', 'everytool-pdf');
   new File(uri).write(out.bytes);
   return { uri, pages: out.pages, bytes: out.bytes.length, shrunk };
+}
+
+/** VisionKit pages, already cropped, one PDF page each. Letterbox-free A4. */
+export async function scannedPagesToPdf(uris: string[]): Promise<PdfResult> {
+  if (uris.length === 0) throw new Error('Scan at least one page.');
+  const items = [];
+  for (const uri of uris) items.push({ bytes: await new File(uri).bytes() });
+  const out = await imagesToPdfBytes(items, {
+    size: SCAN_TO_PDF.size,
+    orientation: SCAN_TO_PDF.orientation,
+    marginPt: SCAN_TO_PDF.marginPt,
+  });
+  return writeResult(out);
 }
 
 /** Merge sources in list order. Images (JPEG/PNG) become one page each. */
