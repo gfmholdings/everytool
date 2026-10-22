@@ -182,6 +182,7 @@ enum SharedVault {
       "file": name,
       "kind": kind,
       "tool": tool,
+      "name": sourceURL.lastPathComponent,
       "at": Date().timeIntervalSince1970 * 1000,
     ])
     writeIndex(dir: dir, entries: entries)

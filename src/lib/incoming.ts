@@ -19,6 +19,8 @@ export interface SharedItem {
   file: string; // name inside ShareInbox
   kind: 'image' | 'pdf' | 'text';
   tool: ToolId;
+  /** Original file name, when the share extension stored one. */
+  name?: string;
 }
 
 export interface BroadcastFrame {

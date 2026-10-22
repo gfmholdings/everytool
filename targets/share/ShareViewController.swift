@@ -267,6 +267,16 @@ struct ShareView: View {
             Spacer()
         }
         .padding(20)
+        // The share sheet action is named Everytool. A PDF has nowhere else
+        // to go, so that one tap opens the PDF tool. iOS has no setting for
+        // a default PDF app; this is the Open In / share path.
+        .onChange(of: model.loading) { _, isLoading in
+            guard !isLoading, model.routed == nil else { return }
+            let kinds = model.items.map(\.kind)
+            guard !kinds.isEmpty, kinds.allSatisfy({ $0 == "pdf" }) else { return }
+            model.route("pdf")
+            onRouted("pdf")
+        }
     }
 
     private var summary: String {

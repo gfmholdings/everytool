@@ -19,6 +19,7 @@ import { File } from 'expo-file-system';
 
 import { ToolGlyph } from './src/components/ui';
 import { drainShareInbox, readBroadcastInbox } from './src/lib/incoming';
+import { pdfTargetFromShare, routeIncomingUrl } from './src/lib/pdfOpen';
 import type { ShotInput } from './src/lib/stitch';
 import { ClipboardScreen } from './src/screens/ClipboardScreen';
 import { ConvertScreen } from './src/screens/ConvertScreen';
@@ -31,7 +32,7 @@ import { SplitScreen } from './src/screens/SplitScreen';
 import { StitchScreen } from './src/screens/StitchScreen';
 import { TextScreen } from './src/screens/TextScreen';
 import { AppStoreProvider, useStore } from './src/store/AppStore';
-import { takePendingTool } from './src/store/sharedVault';
+import { takeOpenedPdf, takePendingTool } from './src/store/sharedVault';
 import { colors, space, type } from './src/theme';
 import { TOOLS, type ToolId } from './src/types';
 
@@ -140,8 +141,19 @@ function Root() {
         return true;
       }
       if (item.kind === 'pdf') {
-        openTool('pdf', { pdf: { uri, name: item.file } });
-      } else if (item.tool === 'stitch') {
+        const target = pdfTargetFromShare([item]);
+        openTool('pdf', { pdf: { uri, name: target?.name ?? item.name ?? item.file } });
+        return true;
+      }
+      const pdfShare = pdfTargetFromShare(items.map((entry) => entry.item));
+      if (pdfShare) {
+        const match = items.find((entry) => entry.item.file === pdfShare.file);
+        if (match) {
+          openTool('pdf', { pdf: { uri: match.uri, name: pdfShare.name } });
+          return true;
+        }
+      }
+      if (item.tool === 'stitch') {
         openTool('stitch', {
           stitchShots: items
             .filter((x) => x.item.kind === 'image')
@@ -176,17 +188,19 @@ function Root() {
     if (!ready) return;
     const handle = (url: string | null) => {
       if (!url) return;
-      const parsed = Linking.parse(url);
-      const path = (parsed.path ?? '').replace(/^\//, '');
-      let ref: string | null = null;
-      if (parsed.hostname === 'tool') ref = path;
-      else if (path.startsWith('tool/')) ref = path.slice('tool/'.length);
-      else if (parsed.hostname === 'stitch' || path === 'stitch') ref = 'stitch';
-      else if (parsed.hostname === 'record' || path === 'record') ref = 'record';
-      else if (parsed.hostname === 'session' || path === 'session') ref = 'session';
+      const route = routeIncomingUrl(url);
+      // A PDF from Files or Open In. The native handler has already copied
+      // it into the sandbox; the existing PDF tool loads that copy.
+      if (route.kind === 'pdf') {
+        const opened = takeOpenedPdf(url);
+        openTool('pdf', {
+          pdf: { uri: opened?.uri ?? url, name: opened?.name ?? route.name },
+        });
+        return;
+      }
       void drainAndRoute().then((routed) => {
         if (routed) return;
-        const target = parseToolRef(ref);
+        const target = route.kind === 'tool' ? parseToolRef(route.ref) : null;
         if (target) openTool(target.id, requestFor(target));
       });
     };

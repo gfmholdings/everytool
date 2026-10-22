@@ -37,6 +37,7 @@ interface SharedVaultNative {
   ): number;
   showBroadcastPicker?(extensionBundleId: string): Promise<boolean>;
   requestNotificationPermission?(): Promise<boolean>;
+  takeOpenedPdf?(sourceUrl: string): { uri: string; name: string } | null;
 }
 
 const native =
@@ -191,6 +192,23 @@ export function reencodeImage(
   try {
     const n = native?.reencodeImage?.(inputUri, outputUri, format, quality, maxWidth, stripMetadata);
     return n == null || n < 0 ? null : n;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The sandbox copy of a PDF opened in place, if the native handler
+ * already copied it. Null in Expo Go or when the URL was not a document open.
+ */
+export function takeOpenedPdf(sourceUrl: string): { uri: string; name: string } | null {
+  if (!native?.takeOpenedPdf) return null;
+  try {
+    const got = native.takeOpenedPdf(sourceUrl);
+    if (!got || typeof got.uri !== 'string' || !got.uri || typeof got.name !== 'string' || !got.name) {
+      return null;
+    }
+    return { uri: got.uri, name: got.name };
   } catch {
     return null;
   }

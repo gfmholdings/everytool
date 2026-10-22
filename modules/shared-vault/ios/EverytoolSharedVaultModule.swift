@@ -237,6 +237,12 @@ public class EverytoolSharedVaultModule: Module {
       return encoded.length
     }
 
+    /// Sandbox copy made by PdfDocumentHandler while the security scope
+    /// was still open. A second delivery of the same URL still resolves.
+    Function("takeOpenedPdf") { (sourceUrl: String) -> [String: String]? in
+      OpenedPdfs.take(sourceUrl)
+    }
+
     /// Lets the broadcast extension post "Your long screenshot is ready"
     /// when the recording stops. Optional — stitching works without it.
     AsyncFunction("requestNotificationPermission") { () async -> Bool in

@@ -95,7 +95,17 @@
         "NSMicrophoneUsageDescription": "Everytool never records audio. This is only requested if you start a screen recording that includes sound.",
         "NSPhotoLibraryAddUsageDescription": "Everytool saves finished screenshots, images and GIFs to your photo library.",
         "NSPhotoLibraryUsageDescription": "Everytool reads the photos you pick \u2014 and, in a screenshot session, the screenshots you take \u2014 so it can stitch, convert, resize, scan and make GIFs, all on this phone.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "PDF",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": ["com.adobe.pdf"]
+          }
+        ],
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "UISupportsDocumentBrowser": true
       },
       "supportsTablet": false
     },

@@ -21,6 +21,8 @@ export interface SharedVaultNative {
   ): number;
   showBroadcastPicker(extensionBundleId: string): Promise<boolean>;
   requestNotificationPermission(): Promise<boolean>;
+  /** Sandbox copy of a PDF opened from Files or another app. */
+  takeOpenedPdf(sourceUrl: string): { uri: string; name: string } | null;
 }
 
 export default requireNativeModule<SharedVaultNative>('EverytoolSharedVault');
