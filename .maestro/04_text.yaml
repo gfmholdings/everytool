@@ -12,8 +12,8 @@ name: Text tools - counts, extraction, cleanup
 - assertVisible: "https://example.org"
 - tapOn: "Emails"
 - assertVisible: "ada@example.com"
-- tapOn: "Save to clipboard"
+- tapOn: "Copy"
 - extendedWaitUntil:
-    visible: "Saved to clipboard history"
+    visible: "Copied"
     timeout: 20000
 - takeScreenshot: 04-text
