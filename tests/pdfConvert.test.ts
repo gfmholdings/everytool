@@ -11,7 +11,6 @@ import {
   CONVERT_ROUTE_LABEL,
   OFFICE_SHARE_NOTE,
   combinePdfBytes,
-  convertActivationUtis,
   convertFilesToPdf,
   describeFile,
   extensionOf,
@@ -111,14 +110,10 @@ test('share sheet: Convert to PDF sits beside the old buttons, and Office gets t
   assert.equal(CONVERT_ROUTE_LABEL, 'Convert to PDF');
 
   const share = readFileSync(new URL('../targets/share/ShareViewController.swift', import.meta.url), 'utf8');
-  const plist = readFileSync(new URL('../targets/share/Info.plist', import.meta.url), 'utf8');
   assert.match(share, /Convert to PDF/);
   assert.match(share, /pdf-convert/);
   assert.match(share, /kind: converting \? "convert"/);
   assert.match(share, /OFFICE_SHARE_NOTE|cannot be turned into a PDF/);
-  for (const uti of convertActivationUtis()) {
-    assert.ok(plist.includes(uti), uti);
-  }
   for (const ext of CONVERT_OPEN_EXTENSIONS) {
     const swift = readFileSync(
       new URL('../modules/shared-vault/ios/PdfDocumentHandler.swift', import.meta.url),

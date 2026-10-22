@@ -10,87 +10,15 @@
       <string>$(PRODUCT_MODULE_NAME).ShareViewController</string>
       <key>NSExtensionAttributes</key>
       <dict>
-        <!-- Photos, PDFs, text, and the files Any file → PDF can try.
-             A dictionary rule (NSExtensionActivationSupportsImageWithMaxCount)
-             does not offer the extension for public.png: the share sheet
-             treats that key as photos (JPEG/HEIC) and a PNG never appears
-             as allowed. Concrete types are named outright, including HTML,
-             CSV, Markdown, Office, and iWork. public.image and public.text
-             stay as a fallback. -->
+        <!-- One short predicate. App Store Connect rejects a rule of
+             4000 characters or more (error 90362). UTI-CONFORMS-TO walks
+             the type hierarchy, so public.image covers PNG, JPEG, HEIC,
+             GIF, TIFF, BMP, and WebP. public.text covers plain text, RTF,
+             HTML, CSV, and Markdown. The dictionary key
+             NSExtensionActivationSupportsImageWithMaxCount is not used:
+             the share sheet treats that key as JPEG/HEIC and skips PNG. -->
         <key>NSExtensionActivationRule</key>
-        <string>SUBQUERY (
-            extensionItems,
-            $extensionItem,
-            $extensionItem.attachments.@count &lt;= 20
-            AND
-            SUBQUERY (
-                $extensionItem.attachments,
-                $attachment,
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.png"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.jpeg"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.heic"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.heif"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.image"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.adobe.pdf"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.text"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.plain-text"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.url"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.gif"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.tiff"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "org.webmproject.webp"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.microsoft.bmp"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.utf8-plain-text"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.rtf"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.rtfd"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.html"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.comma-separated-values-text"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "net.daringfireball.markdown"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.webarchive"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "org.openxmlformats.wordprocessingml.document"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "org.openxmlformats.spreadsheetml.sheet"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "org.openxmlformats.presentationml.presentation"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.pages.sffpages"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.pages.pages"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.numbers.sffnumbers"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.numbers.numbers"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.keynote.sffkey"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.keynote.key"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.pages"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.numbers"
-                OR
-                ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.apple.iwork.keynote"
-            ).@count &gt;= 1
-        ).@count &gt;= 1</string>
+        <string>SUBQUERY(extensionItems, $extensionItem, $extensionItem.attachments.@count &lt;= 20 AND SUBQUERY($extensionItem.attachments, $attachment, SUBQUERY($attachment.registeredTypeIdentifiers, $uti, $uti UTI-CONFORMS-TO "public.image" OR $uti UTI-CONFORMS-TO "public.movie" OR $uti UTI-CONFORMS-TO "com.adobe.pdf" OR $uti UTI-CONFORMS-TO "public.plain-text" OR $uti UTI-CONFORMS-TO "public.text" OR $uti UTI-CONFORMS-TO "public.url" OR $uti UTI-CONFORMS-TO "public.file-url").@count &gt;= 1).@count &gt;= 1).@count &gt;= 1</string>
       </dict>
     </dict>
   </dict>
