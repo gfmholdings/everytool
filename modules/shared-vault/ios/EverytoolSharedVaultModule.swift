@@ -1,3 +1,5 @@
+import AVFoundation
+import CoreGraphics
 import ExpoModulesCore
 import ImageIO
 import ReplayKit
@@ -243,6 +245,16 @@ public class EverytoolSharedVaultModule: Module {
       OpenedPdfs.take(sourceUrl)
     }
 
+    /// Video frames as raw 8-bit sRGB RGBA files. One generator, exact
+    /// timestamps, upright pixels. The GIF encoder reads these bytes
+    /// directly — there is no PNG, JPEG, or HEIC in between, because
+    /// ImageIO's stills of HEVC/HDR/P3 clips are often 16-bit and the
+    /// JS PNG decoder rejects them ("Unsupported PNG format.").
+    AsyncFunction("sampleVideoFrames") {
+      (videoUri: String, timesMs: [Double], maxWidth: Int) async throws -> [[String: Any]] in
+      try await sampleVideoFrames(videoUri: videoUri, timesMs: timesMs, maxWidth: maxWidth)
+    }
+
     /// Lets the broadcast extension post "Your long screenshot is ready"
     /// when the recording stops. Optional — stitching works without it.
     AsyncFunction("requestNotificationPermission") { () async -> Bool in
@@ -251,4 +263,156 @@ public class EverytoolSharedVaultModule: Module {
       return granted ?? false
     }
   }
+}
+
+private func gifSampleError(_ message: String) -> NSError {
+  NSError(
+    domain: "EverytoolGif",
+    code: 1,
+    userInfo: [NSLocalizedDescriptionKey: message]
+  )
+}
+
+private func videoFileURL(from uri: String) -> URL? {
+  if uri.hasPrefix("/") {
+    return URL(fileURLWithPath: uri)
+  }
+  guard let url = URL(string: uri), url.scheme != "ph", url.scheme != "assets-library" else {
+    return nil
+  }
+  return url
+}
+
+/// Draw one generator image into straight 8-bit sRGB RGBA, top row first.
+/// HDR and Display P3 are tone-mapped through an SDR renderer first so a
+/// 16-bit or wide-gamut CGImage cannot reach the GIF encoder.
+private func straightSrgbRgba(from image: CGImage, maxWidth: Int) -> (Data, Int, Int)? {
+  let srcW = image.width
+  let srcH = image.height
+  guard srcW > 0, srcH > 0 else { return nil }
+  let limit = min(4096, max(1, maxWidth))
+  let scale = srcW > limit ? Double(limit) / Double(srcW) : 1
+  var outW = max(1, Int((Double(srcW) * scale).rounded()))
+  var outH = max(1, Int((Double(srcH) * scale).rounded()))
+  let tallest = limit * 3
+  if outH > tallest {
+    let fit = Double(tallest) / Double(outH)
+    outW = max(1, Int((Double(outW) * fit).rounded()))
+    outH = tallest
+  }
+
+  let format = UIGraphicsImageRendererFormat()
+  format.scale = 1
+  format.opaque = true
+  format.preferredRange = .standard
+  let renderer = UIGraphicsImageRenderer(
+    size: CGSize(width: outW, height: outH),
+    format: format
+  )
+  let rendered = renderer.image { _ in
+    UIImage(cgImage: image).draw(in: CGRect(x: 0, y: 0, width: outW, height: outH))
+  }
+  guard let cg = rendered.cgImage, let cs = CGColorSpace(name: CGColorSpace.sRGB) else {
+    return nil
+  }
+
+  let rowBytes = outW * 4
+  var raw = Data(count: outH * rowBytes)
+  let drew = raw.withUnsafeMutableBytes { (buf: UnsafeMutableRawBufferPointer) -> Bool in
+    guard let base = buf.baseAddress else { return false }
+    guard let ctx = CGContext(
+      data: base,
+      width: outW,
+      height: outH,
+      bitsPerComponent: 8,
+      bytesPerRow: rowBytes,
+      space: cs,
+      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+    ) else { return false }
+    ctx.interpolationQuality = .high
+    // Quartz bitmaps are bottom-up. Flip so byte 0 is the top-left pixel.
+    ctx.translateBy(x: 0, y: CGFloat(outH))
+    ctx.scaleBy(x: 1, y: -1)
+    ctx.draw(cg, in: CGRect(x: 0, y: 0, width: outW, height: outH))
+    return true
+  }
+  guard drew else { return nil }
+
+  raw.withUnsafeMutableBytes { (buf: UnsafeMutableRawBufferPointer) in
+    let pixels = buf.bindMemory(to: UInt8.self)
+    var i = 0
+    while i + 3 < pixels.count {
+      let alpha = Int(pixels[i + 3])
+      if alpha == 0 {
+        pixels[i] = 0
+        pixels[i + 1] = 0
+        pixels[i + 2] = 0
+      } else if alpha < 255 {
+        pixels[i] = UInt8(min(255, Int(pixels[i]) * 255 / alpha))
+        pixels[i + 1] = UInt8(min(255, Int(pixels[i + 1]) * 255 / alpha))
+        pixels[i + 2] = UInt8(min(255, Int(pixels[i + 2]) * 255 / alpha))
+      }
+      pixels[i + 3] = 255
+      i += 4
+    }
+  }
+  return (raw, outW, outH)
+}
+
+/// Sample every requested time with one image generator.
+/// `appliesPreferredTrackTransform` turns portrait clips and rotated
+/// screen recordings upright. Tolerance is zero so a 60fps source is
+/// read on the asked frame, not a nearby keyframe. Times are milliseconds.
+private func sampleVideoFrames(
+  videoUri: String,
+  timesMs: [Double],
+  maxWidth: Int
+) async throws -> [[String: Any]] {
+  guard let url = videoFileURL(from: videoUri) else {
+    throw gifSampleError("Couldn’t open that video.")
+  }
+  let asset = AVURLAsset(
+    url: url,
+    options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]
+  )
+  let generator = AVAssetImageGenerator(asset: asset)
+  generator.appliesPreferredTrackTransform = true
+  generator.requestedTimeToleranceBefore = .zero
+  generator.requestedTimeToleranceAfter = .zero
+  let cap = min(4096, max(1, maxWidth))
+  // Width is the GIF size. Height follows the upright aspect, capped so
+  // a pathological track cannot allocate a multi-hundred-megabyte frame.
+  generator.maximumSize = CGSize(width: cap, height: cap * 3)
+
+  var frames: [[String: Any]] = []
+  for ms in timesMs {
+    let time = CMTime(seconds: max(0, ms) / 1000, preferredTimescale: 60000)
+    let cgImage: CGImage
+    do {
+      let (image, _) = try await generator.image(at: time)
+      cgImage = image
+    } catch {
+      continue
+    }
+    guard let (data, width, height) = straightSrgbRgba(from: cgImage, maxWidth: cap) else {
+      continue
+    }
+    let file = FileManager.default.temporaryDirectory
+      .appendingPathComponent("everytool-rgba-\(UUID().uuidString).rgba")
+    do {
+      try data.write(to: file, options: .atomic)
+    } catch {
+      continue
+    }
+    frames.append([
+      "uri": file.absoluteString,
+      "width": width,
+      "height": height,
+      "timeMs": ms,
+    ])
+  }
+  if frames.isEmpty {
+    throw gifSampleError("No frames could be read from that video.")
+  }
+  return frames
 }

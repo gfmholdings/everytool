@@ -38,6 +38,11 @@ interface SharedVaultNative {
   showBroadcastPicker?(extensionBundleId: string): Promise<boolean>;
   requestNotificationPermission?(): Promise<boolean>;
   takeOpenedPdf?(sourceUrl: string): { uri: string; name: string } | null;
+  sampleVideoFrames?(
+    videoUri: string,
+    timesMs: number[],
+    maxWidth: number,
+  ): Promise<{ uri: string; width: number; height: number; timeMs: number }[]>;
 }
 
 const native =

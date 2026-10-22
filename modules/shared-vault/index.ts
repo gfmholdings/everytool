@@ -23,6 +23,16 @@ export interface SharedVaultNative {
   requestNotificationPermission(): Promise<boolean>;
   /** Sandbox copy of a PDF opened from Files or another app. */
   takeOpenedPdf(sourceUrl: string): { uri: string; name: string } | null;
+  /**
+   * Raw 8-bit sRGB RGBA frames (width × height × 4, top-left, straight
+   * alpha). `timesMs` are milliseconds. Absent on binaries built before
+   * this function existed.
+   */
+  sampleVideoFrames?(
+    videoUri: string,
+    timesMs: number[],
+    maxWidth: number,
+  ): Promise<{ uri: string; width: number; height: number; timeMs: number }[]>;
 }
 
 export default requireNativeModule<SharedVaultNative>('EverytoolSharedVault');

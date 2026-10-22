@@ -6,6 +6,10 @@
 export const GIF_MAX_SECONDS = 5;
 export const GIF_FPS = 8;
 export const GIF_WIDTH = 360;
+/** Shortest stretch the trim bar will keep. */
+export const GIF_MIN_SECONDS = 0.5;
+/** Longest stretch the trim bar will keep. */
+export const GIF_RANGE_MAX_SECONDS = 10;
 
 const LEVELS = [0, 51, 102, 153, 204, 255];
 
@@ -262,21 +266,157 @@ export function quantizeWithPalette(
   return out;
 }
 
+function roundMs(seconds: number): number {
+  return Math.round(seconds * 1000) / 1000;
+}
+
+/**
+ * Clamp a trim range into the clip. Minimum 0.5 s (or the whole clip if
+ * it is shorter), maximum 10 s. `anchor` is the edge the user held still:
+ * `'start'` moves the end, `'end'` moves the start, `'window'` slides both.
+ */
+export function clampGifRange(o: {
+  durationSec: number;
+  startSec: number;
+  endSec: number;
+  anchor?: 'start' | 'end' | 'window';
+}): { startSec: number; endSec: number; lengthSec: number } {
+  const dur = roundMs(o.durationSec > 0 ? o.durationSec : GIF_MAX_SECONDS);
+  const minLen = Math.min(GIF_MIN_SECONDS, dur);
+  const maxLen = Math.min(GIF_RANGE_MAX_SECONDS, dur);
+  const anchor = o.anchor ?? 'start';
+
+  if (anchor === 'window') {
+    let length = o.endSec - o.startSec;
+    if (!Number.isFinite(length)) length = minLen;
+    length = Math.min(maxLen, Math.max(minLen, length));
+    let start = Number.isFinite(o.startSec) ? o.startSec : 0;
+    if (start < 0) start = 0;
+    if (start + length > dur) start = dur - length;
+    if (start < 0) start = 0;
+    start = roundMs(start);
+    const end = roundMs(Math.min(dur, start + length));
+    return { startSec: start, endSec: end, lengthSec: roundMs(end - start) };
+  }
+
+  if (anchor === 'end') {
+    let end = Number.isFinite(o.endSec) ? o.endSec : minLen;
+    end = Math.min(dur, Math.max(minLen, end));
+    let start = Number.isFinite(o.startSec) ? o.startSec : end - minLen;
+    if (end - start < minLen) start = end - minLen;
+    if (end - start > maxLen) start = end - maxLen;
+    if (start < 0) start = 0;
+    start = roundMs(Math.max(0, start));
+    end = roundMs(Math.min(dur, end));
+    if (end - start < minLen) end = roundMs(Math.min(dur, start + minLen));
+    return { startSec: start, endSec: end, lengthSec: roundMs(end - start) };
+  }
+
+  let start = Number.isFinite(o.startSec) ? o.startSec : 0;
+  start = Math.min(Math.max(0, start), Math.max(0, dur - minLen));
+  let end = Number.isFinite(o.endSec) ? o.endSec : start + minLen;
+  if (end < start + minLen) end = start + minLen;
+  if (end - start > maxLen) end = start + maxLen;
+  if (end > dur) {
+    end = dur;
+    if (end - start < minLen) start = Math.max(0, end - minLen);
+    if (end - start > maxLen) start = Math.max(0, end - maxLen);
+  }
+  start = roundMs(start);
+  end = roundMs(Math.min(dur, Math.max(start, end)));
+  return { startSec: start, endSec: end, lengthSec: roundMs(end - start) };
+}
+
 /** The frame plan (pure): start/length clamped to the clip, frame times in ms. */
 export function planGif(o: {
   durationSec: number;
   startSec?: number;
   lengthSec?: number;
   fps?: number;
-}): { times: number[]; fps: number } {
+}): {
+  times: number[];
+  fps: number;
+  startSec: number;
+  endSec: number;
+  lengthSec: number;
+} {
   const fps = Math.max(1, Math.min(15, Math.round(o.fps ?? GIF_FPS)));
-  const dur = o.durationSec > 0 ? o.durationSec : GIF_MAX_SECONDS;
-  const start = Math.max(0, Math.min(o.startSec ?? 0, Math.max(0, dur - 0.2)));
-  const length = Math.max(0.2, Math.min(o.lengthSec ?? GIF_MAX_SECONDS, 10, dur - start));
-  const count = Math.max(1, Math.floor(length * fps));
+  const startSec = o.startSec ?? 0;
+  const range = clampGifRange({
+    durationSec: o.durationSec,
+    startSec,
+    endSec: startSec + (o.lengthSec ?? GIF_MAX_SECONDS),
+    anchor: 'start',
+  });
+  const durMs = Math.round((o.durationSec > 0 ? o.durationSec : GIF_MAX_SECONDS) * 1000);
+  const count = Math.max(1, Math.floor(range.lengthSec * fps + 1e-6));
+  const times = Array.from({ length: count }, (_, i) =>
+    Math.round((range.startSec + i / fps) * 1000),
+  ).filter((t) => t < durMs);
   return {
     fps,
-    times: Array.from({ length: count }, (_, i) => Math.round((start + i / fps) * 1000)),
+    startSec: range.startSec,
+    endSec: range.endSec,
+    lengthSec: range.lengthSec,
+    times: times.length > 0 ? times : [Math.max(0, durMs - 1)],
   };
+}
+
+/** GIF delay in centiseconds from the first two sample times. Minimum 2. */
+export function gifDelayCs(times: number[], fps: number): number {
+  const gapSec = times.length > 1 ? ((times[1] ?? 0) - (times[0] ?? 0)) / 1000 : 1 / Math.max(1, fps);
+  return Math.max(2, Math.round(gapSec * 100));
+}
+
+/** `0:10.0` — minutes, seconds, and tenths. */
+export function formatGifTime(seconds: number): string {
+  const tenthsTotal = Math.max(0, Math.round((Number.isFinite(seconds) ? seconds : 0) * 10));
+  const tenths = tenthsTotal % 10;
+  const whole = Math.floor(tenthsTotal / 10);
+  const s = whole % 60;
+  const m = Math.floor(whole / 60);
+  return `${m}:${s.toString().padStart(2, '0')}.${tenths}`;
+}
+
+/**
+ * Rough byte size before LZW. Best colour dithers, so it packs worse
+ * than the flat Fast cube. The label says "about".
+ */
+export function estimateGifBytes(o: {
+  width: number;
+  height: number;
+  frames: number;
+  colour?: 'best' | 'fast';
+}): number {
+  const frames = Math.max(0, o.frames);
+  const pixels = Math.max(0, o.width) * Math.max(0, o.height) * frames;
+  const perPixel = o.colour === 'fast' ? 0.35 : 0.7;
+  return Math.round(pixels * perPixel + 800 + frames * 20);
+}
+
+/**
+ * RGBA frames → GIF89a. Best builds one palette for the whole clip and
+ * dithers; Fast uses the fixed 216-colour cube. No image-file decode.
+ */
+export function gifFromRgba(
+  frames: Uint8Array[],
+  width: number,
+  height: number,
+  delayCs: number,
+  colour: 'best' | 'fast' = 'best',
+): Uint8Array {
+  const delay = Math.max(2, Math.round(delayCs));
+  if (colour === 'fast') {
+    return encodeGif(
+      frames.map((frame) => quantizeFrame(frame)),
+      width,
+      height,
+      delay,
+    );
+  }
+  const palette = buildPalette(frames);
+  const cache = new Int16Array(32768).fill(-1);
+  const indexed = frames.map((frame) => quantizeWithPalette(frame, width, palette, true, cache));
+  return encodeGif(indexed, width, height, delay, palette);
 }
 
