@@ -264,22 +264,31 @@ public class EverytoolSharedVaultModule: Module {
     /// pages. Each page is a JPEG in tmp. An empty list means Cancel.
     /// The same call feeds Split bill and Scan to PDF.
     AsyncFunction("scanDocuments") { (promise: Promise) in
-      DispatchQueue.main.async {
+      onMain {
         self.beginDocumentScan(promise)
       }
     }
+    .runOnQueue(.main)
 
     /// DataScanner live text. Optional: only some devices support it.
+    /// Sync on purpose: the split screen reads it while drawing the button.
     Function("liveTextSupported") { () -> Bool in
-      DataScannerViewController.isSupported && DataScannerViewController.isAvailable
+      onMain {
+        // `&&` wraps the right-hand side in an autoclosure. Read both
+        // main-actor flags in this closure so that autoclosure stays isolated.
+        let supported = DataScannerViewController.isSupported
+        let available = DataScannerViewController.isAvailable
+        return supported && available
+      }
     }
 
     /// Live text over the camera. Boxes match recognizeText. Empty means Cancel.
     AsyncFunction("scanLiveText") { (promise: Promise) in
-      DispatchQueue.main.async {
+      onMain {
         self.beginLiveText(promise)
       }
     }
+    .runOnQueue(.main)
 
     /// Lets the broadcast extension post "Your long screenshot is ready"
     /// when the recording stops. Optional — stitching works without it.
@@ -290,6 +299,7 @@ public class EverytoolSharedVaultModule: Module {
     }
   }
 
+  @MainActor
   private func beginDocumentScan(_ promise: Promise) {
     guard let presenter = topPresenter() else {
       promise.reject("ERR_SCAN", "Open Everytool and try the scanner again.")
@@ -311,8 +321,11 @@ public class EverytoolSharedVaultModule: Module {
     presenter.present(camera, animated: true)
   }
 
+  @MainActor
   private func beginLiveText(_ promise: Promise) {
-    guard DataScannerViewController.isSupported, DataScannerViewController.isAvailable else {
+    let supported = DataScannerViewController.isSupported
+    let available = DataScannerViewController.isAvailable
+    guard supported, available else {
       promise.reject("ERR_LIVE_TEXT", "Live text isn’t available on this iPhone.")
       return
     }
@@ -342,20 +355,39 @@ public class EverytoolSharedVaultModule: Module {
     )
     scanner.delegate = coordinator
     liveTextScan = coordinator
+    // UIKit invokes this completion on the main thread, but the closure
+    // type is not itself main-actor isolated.
     presenter.present(scanner, animated: true) {
-      coordinator.installButtons()
-      do {
-        try scanner.startScanning()
-      } catch {
-        scanner.dismiss(animated: true) {
-          self.liveTextScan = nil
-          promise.reject("ERR_LIVE_TEXT", error.localizedDescription)
+      onMain {
+        coordinator.installButtons()
+        do {
+          try scanner.startScanning()
+        } catch {
+          scanner.dismiss(animated: true) {
+            self.liveTextScan = nil
+            promise.reject("ERR_LIVE_TEXT", error.localizedDescription)
+          }
         }
       }
     }
   }
 }
 
+/// Expo `Function` and `AsyncFunction` bodies are nonisolated. VisionKit's
+/// data scanner is `@MainActor`, and `DispatchQueue.main.async` does not
+/// make the closure isolated — that is what the Xcode 26 archive rejected.
+/// Run `work` on the main thread, then assume that isolation. Safe on the
+/// pod's iOS 16.4 deployment: `MainActor.assumeIsolated` is iOS 13+.
+private func onMain<T: Sendable>(_ work: @MainActor () -> T) -> T {
+  if Thread.isMainThread {
+    return MainActor.assumeIsolated(work)
+  }
+  return DispatchQueue.main.sync {
+    MainActor.assumeIsolated(work)
+  }
+}
+
+@MainActor
 private func topPresenter() -> UIViewController? {
   let scene = UIApplication.shared.connectedScenes
     .compactMap { $0 as? UIWindowScene }
@@ -422,6 +454,8 @@ private func writeScanPages(_ scan: VNDocumentCameraScan) -> [String] {
 }
 
 /// Optional live text. The user holds the receipt in frame and taps Use this text.
+/// Isolation matches `DataScannerViewControllerDelegate` (main actor).
+@MainActor
 final class LiveTextCoordinator: NSObject, DataScannerViewControllerDelegate {
   private let onFinish: ([[String: Any]]) -> Void
   private let onFail: (String) -> Void

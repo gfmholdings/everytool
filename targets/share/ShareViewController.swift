@@ -379,8 +379,12 @@ final class ShareViewController: UIViewController {
             },
             onRouted: { [weak self] tool in
                 // Give the inbox write a beat, then open the app.
+                // asyncAfter's closure is nonisolated; openApp is main-actor
+                // isolated with the rest of this view controller.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    self?.openApp(tool: tool)
+                    MainActor.assumeIsolated {
+                        self?.openApp(tool: tool)
+                    }
                 }
             }
         )

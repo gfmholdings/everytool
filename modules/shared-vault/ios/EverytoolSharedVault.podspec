@@ -19,9 +19,11 @@ Pod::Spec.new do |s|
   s.dependency 'ExpoModulesCore'
   s.frameworks = 'ReplayKit', 'UserNotifications', 'Vision', 'VisionKit', 'ImageIO', 'WidgetKit', 'AVFoundation', 'CoreGraphics'
 
-  # Palette.swift lives with the extensions. Compile that one file here too
-  # so the receipt scanner uses the same tokens without a second copy.
-  s.source_files = '**/*.{h,m,swift}', '../../../targets/_shared/Palette.swift'
+  # Palette.swift is copied into this directory (same bytes as
+  # targets/_shared/Palette.swift; the palette test keeps them identical).
+  # CocoaPods does not compile a source path that escapes the pod root —
+  # the Xcode 26 archive file list was only the Swift files in this folder.
+  s.source_files = '**/*.{h,m,swift}'
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'SWIFT_COMPILATION_MODE' => 'wholemodule'

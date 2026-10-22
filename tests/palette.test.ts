@@ -64,8 +64,19 @@ test('text and UI contrast meet WCAG AA in light and dark', () => {
   assert.equal(light.primary === dark.primary, false);
 });
 
+const swiftPaletteFiles = [
+  'targets/_shared/Palette.swift',
+  'modules/shared-vault/ios/Palette.swift',
+];
+
 test('the Swift palette uses the same bytes as the token file', () => {
   const swift = readFileSync(new URL('../targets/_shared/Palette.swift', import.meta.url), 'utf8');
+  const pod = readFileSync(new URL('../modules/shared-vault/ios/Palette.swift', import.meta.url), 'utf8');
+  assert.equal(
+    pod,
+    swift,
+    'modules/shared-vault/ios/Palette.swift must match targets/_shared/Palette.swift',
+  );
   const hex = (value: string) => {
     const wide =
       value.length === 4
@@ -96,10 +107,10 @@ test('raw hex colors live only in the token file', () => {
     const text = readFileSync(path, 'utf8');
     const found = text.match(HEX)?.filter(isColorHex) ?? [];
     if (found.length > 0) offenders.push(`${rel}: ${found.join(', ')}`);
-    if (rel !== 'targets/_shared/Palette.swift' && /UIColor\(\s*(red|white)\s*:/.test(text)) {
+    if (!swiftPaletteFiles.includes(rel) && /UIColor\(\s*(red|white)\s*:/.test(text)) {
       offenders.push(`${rel}: UIColor component`);
     }
-    if (rel.endsWith('.swift') && rel !== 'targets/_shared/Palette.swift') {
+    if (rel.endsWith('.swift') && !swiftPaletteFiles.includes(rel)) {
       if (/\.systemBlue\b|\.foregroundStyle\(\.orange\)|\.foregroundStyle\(\.secondary\)/.test(text)) {
         offenders.push(`${rel}: system color`);
       }
