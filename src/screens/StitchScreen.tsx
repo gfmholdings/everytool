@@ -17,6 +17,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Card, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
+import { useUndoHistory } from '../hooks/useUndoHistory';
 import { formatBytes, saveToPhotos, shareFile } from '../lib/files';
 import { clearBroadcastInbox, readBroadcastInbox, type BroadcastInbox } from '../lib/incoming';
 import {
@@ -38,13 +39,17 @@ import {
   type StitchPhase,
   type StitchResult,
 } from '../lib/stitch';
-import type { Segment } from '../lib/stitchCore';
+import { overlapWarning, type ColumnRepair, type OverlayStamp, type Segment } from '../lib/stitchCore';
+import { previewSpan } from '../lib/stitchMath';
 import {
   requestNotificationPermission,
   sharedVaultAvailable,
   showBroadcastPicker,
 } from '../store/sharedVault';
-import { colors, type } from '../theme';
+import { dark, type Palette } from '../theme';
+import { useThemed } from '../useTheme';
+
+type Notify = (msg: string, action?: { label: string; onPress: () => void }) => void;
 
 type Mode = 'session' | 'record' | 'photos';
 
@@ -80,14 +85,16 @@ export function StitchScreen({
   recordRequest?: number;
   /** A new value asks the screen to stitch the session (from a control). */
   sessionRequest?: number;
-  notify: (msg: string) => void;
+  notify: Notify;
 }) {
+  const { type, styles } = useThemed(makeStyles);
   const [mode, setMode] = useState<Mode>(initialShots?.length ? 'photos' : 'session');
   const [sessionAt, setSessionAt] = useState<number | null>(() => sessionStart());
   const [sessionCount, setSessionCount] = useState(0);
   const [photoAccess, setPhotoAccess] = useState<PhotoAccess | null>(null);
   const [sessionAssets, setSessionAssets] = useState<string[]>([]);
-  const [shots, setShots] = useState<ShotInput[]>(initialShots ?? []);
+  const shotsHist = useUndoHistory<ShotInput[]>(initialShots ?? [], { shake: true });
+  const shots = shotsHist.present;
   const [result, setResult] = useState<StitchResult | null>(null);
   const [resultFrom, setResultFrom] = useState<Mode | null>(null);
   const [busy, setBusy] = useState(false);
@@ -97,6 +104,16 @@ export function StitchScreen({
   const [viewer, setViewer] = useState(false);
   const autoStitched = useRef<string | null>(null);
   const busyRef = useRef(false);
+  /** Latest committed image. Updated synchronously, not on the next render,
+   *  so Save cannot read a pre-redaction URI that setState has not flushed. */
+  const resultRef = useRef<StitchResult | null>(null);
+  /** In-flight "Hide details" rewrite. Save waits for it. */
+  const pendingRender = useRef<Promise<void> | null>(null);
+
+  const commitResult = useCallback((next: StitchResult | null) => {
+    resultRef.current = next;
+    setResult(next);
+  }, []);
 
   const onProgress = useCallback((phase: StitchPhase, done: number, total: number) => {
     setProgress(
@@ -110,17 +127,20 @@ export function StitchScreen({
       busyRef.current = true;
       setBusy(true);
       setError(null);
-      setResult(null);
+      commitResult(null);
       try {
         const out = await stitchFrames(inputs, {
           mode: from === 'record' ? 'record' : 'photos',
           onProgress,
         });
-        setResult(out);
+        commitResult(out);
         setResultFrom(from);
-        if (out.stackedSeams > 0) {
+        if (out.gaps.length === 1) {
+          const g = out.gaps[0]!;
+          notify(overlapWarning(g.first, g.second));
+        } else if (out.gaps.length > 1) {
           notify(
-            `Stitched — ${out.stackedSeams} spot${out.stackedSeams === 1 ? '' : 's'} didn’t overlap and ${out.stackedSeams === 1 ? 'was' : 'were'} stacked.`,
+            `${out.gaps.length} joins don’t overlap — retake those with a bit less scroll`,
           );
         }
         return out;
@@ -133,7 +153,7 @@ export function StitchScreen({
         setProgress(null);
       }
     },
-    [notify, onProgress],
+    [commitResult, notify, onProgress],
   );
 
   // Watch the broadcast inbox while this screen is open: show live
@@ -229,7 +249,7 @@ export function StitchScreen({
     startSession(now);
     setSessionAt(now);
     setSessionCount(0);
-    setResult(null);
+    commitResult(null);
     notify('Session started — take screenshots as you scroll');
   };
 
@@ -317,13 +337,13 @@ export function StitchScreen({
       width: a.width,
       height: a.height,
     }));
-    setShots((s) => [...s, ...picked]);
-    setResult(null);
+    shotsHist.commit((s) => [...s, ...picked]);
+    commitResult(null);
     setError(null);
   };
 
-  const move = (index: number, dir: -1 | 1) =>
-    setShots((all) => {
+  const move = (index: number, dir: -1 | 1) => {
+    shotsHist.commit((all) => {
       const j = index + dir;
       if (j < 0 || j >= all.length) return all;
       const next = [...all];
@@ -331,18 +351,28 @@ export function StitchScreen({
       if (item) next.splice(j, 0, item);
       return next;
     });
+  };
 
   const save = async () => {
-    if (!result) return;
-    const problem = await saveToPhotos(result.uri);
+    const pending = pendingRender.current;
+    if (pending) await pending;
+    const current = resultRef.current;
+    if (!current) return;
+    // Snapshot after the redaction render has committed. PhotoKit must
+    // receive that file, not the image from before Hide details.
+    const uri = current.uri;
+    const problem = await saveToPhotos(uri);
     if (problem) setError(problem);
     else notify('Saved to Photos');
   };
 
   const copyImage = async () => {
-    if (!result) return;
+    const pending = pendingRender.current;
+    if (pending) await pending;
+    const current = resultRef.current;
+    if (!current) return;
     try {
-      const b64 = await new File(result.uri).base64();
+      const b64 = await new File(current.uri).base64();
       await Clipboard.setImageAsync(b64);
       notify('Copied');
     } catch {
@@ -350,17 +380,65 @@ export function StitchScreen({
     }
   };
 
+  const applyRedactions = useCallback(
+    async (rects: Redaction[]): Promise<boolean> => {
+      const base = resultRef.current;
+      if (!base || busyRef.current) return false;
+      busyRef.current = true;
+      setBusy(true);
+      const job = (async (): Promise<boolean> => {
+        try {
+          const next = await renderStitch(base, rects, onProgress);
+          commitResult(next);
+          notify(
+            rects.length
+              ? `Hid ${rects.length} area${rects.length === 1 ? '' : 's'}`
+              : 'All areas shown again',
+          );
+          return true;
+        } catch (e) {
+          setError(e instanceof Error ? e.message : 'Couldn’t update the image.');
+          return false;
+        } finally {
+          busyRef.current = false;
+          setBusy(false);
+          setProgress(null);
+        }
+      })();
+      const gate = job.then(
+        () => undefined,
+        () => undefined,
+      );
+      pendingRender.current = gate;
+      try {
+        return await job;
+      } finally {
+        if (pendingRender.current === gate) pendingRender.current = null;
+      }
+    },
+    [commitResult, notify, onProgress],
+  );
+
   const discardRecording = () => {
     clearBroadcastInbox();
     setInbox({ frames: [], finished: false });
-    if (resultFrom === 'record') setResult(null);
+    if (resultFrom === 'record') commitResult(null);
     notify('Recording discarded');
   };
 
   const recording = inbox.frames.length > 0 && !inbox.finished;
 
   return (
-    <ToolShell title="Long screenshot" onBack={onBack}>
+    <ToolShell
+      title="Long screenshot"
+      onBack={onBack}
+      undo={{
+        canUndo: shotsHist.canUndo,
+        canRedo: shotsHist.canRedo,
+        onUndo: () => shotsHist.undo(),
+        onRedo: () => shotsHist.redo(),
+      }}
+    >
       <Segmented
         options={[
           { id: 'session', label: 'Screenshots' },
@@ -377,16 +455,19 @@ export function StitchScreen({
             <Text style={type.h2}>Screenshot as you scroll</Text>
             <Text style={[type.body, styles.spaced]}>
               1. Tap Start.{'\n'}
-              2. In any app, take a screenshot (side button + volume up),
-              scroll down a little, take another — as many as you like.
-              Keep a bit of overlap between them.{'\n'}
+              2. In any app, take a screenshot (side button + volume up).
+              Scroll a bit less than a full screen, so part of the last
+              shot is still showing, then take another — as many as you
+              like.{'\n'}
               3. Come back and tap Stitch. Everytool joins every screenshot
               taken since Start into one long image.
             </Text>
             <Text style={[type.small, styles.spaced]}>
-              Tip: Settings → Accessibility → Touch → Back Tap → Double Tap →
-              Screenshot lets you capture with a tap on the back of the
-              phone. You can also add “Start Long Screenshot” and “Stitch
+              Tip: Scroll a bit less than a full screen each time, so part of
+              the last shot is still showing. Settings → Accessibility →
+              Touch → Back Tap → Double Tap, then choose Screenshot. iOS
+              saves each shot to Photos automatically. Come back and tap
+              Stitch. You can also add “Start Long Screenshot” and “Stitch
               Screenshots” to Control Center.
             </Text>
           </Card>
@@ -409,7 +490,6 @@ export function StitchScreen({
                   label={busy ? 'Stitching…' : `Stitch ${sessionCount >= 2 ? `${sessionCount} screenshots` : 'screenshots'}`}
                   onPress={() => void finishSession()}
                   disabled={busy}
-                  orange
                   testID="stitch.session.finish"
                 />
                 <GhostButton label="Cancel session" onPress={cancelSession} />
@@ -420,7 +500,6 @@ export function StitchScreen({
               label="Start"
               onPress={() => void beginSession()}
               disabled={busy}
-              orange
               testID="stitch.session.start"
             />
           )}
@@ -447,7 +526,6 @@ export function StitchScreen({
             label={recording ? 'Recording…' : 'Record'}
             onPress={() => void startRecording()}
             disabled={busy || recording}
-            orange
             testID="stitch.record"
           />
           {recording && (
@@ -493,7 +571,10 @@ export function StitchScreen({
                     </Pressable>
                     <Pressable
                       accessibilityLabel="Remove"
-                      onPress={() => setShots((all) => all.filter((_, j) => j !== i))}
+                      onPress={() => {
+                        shotsHist.commit((all) => all.filter((_, j) => j !== i));
+                        notify('Removed', { label: 'Undo', onPress: () => shotsHist.undo() });
+                      }}
                       hitSlop={6}
                     >
                       <Text style={styles.thumbBtn}>✕</Text>
@@ -515,12 +596,12 @@ export function StitchScreen({
               label={busy ? 'Stitching…' : `Stitch ${shots.length} shots`}
               onPress={() => void run(shots, 'photos')}
               disabled={busy}
-              orange
             />
           )}
           <Text style={type.small}>
-            Pick screenshots top to bottom that overlap a little. Fixed bars
-            (status, navigation, tab bar) are kept once. Use ‹ › to reorder.
+            Scroll a bit less than a full screen between shots, so part of
+            the last one is still showing. Fixed bars (status, navigation,
+            tab bar) are kept once. Use ‹ › to reorder.
           </Text>
         </>
       )}
@@ -544,10 +625,14 @@ export function StitchScreen({
                 {result.trimmed > 0 ? `${result.trimmed} frames at the start/end left out.` : ''}
               </Text>
             )}
-            {result.stackedSeams > 0 && (
-              <Text style={[type.small, styles.center]}>
-                {result.stackedSeams} spot{result.stackedSeams === 1 ? '' : 's'} didn’t
-                overlap (scrolled too fast) and {result.stackedSeams === 1 ? 'was' : 'were'} stacked in order.
+            {result.gaps.slice(0, 6).map((g) => (
+              <Text key={`${g.first}-${g.second}`} style={styles.warning}>
+                {overlapWarning(g.first, g.second)}
+              </Text>
+            ))}
+            {result.gaps.length > 6 && (
+              <Text style={styles.warning}>
+                And {result.gaps.length - 6} more — retake those with a bit less scroll.
               </Text>
             )}
             <GhostButton label="View full length" onPress={() => setViewer(true)} />
@@ -555,11 +640,16 @@ export function StitchScreen({
           <PrimaryButton label="Save to Photos" onPress={() => void save()} testID="stitch.save" />
           <GhostButton
             label="Share image"
-            onPress={() =>
-              void shareFile(result.uri, 'image/png').then((ok) => {
+            onPress={() => {
+              void (async () => {
+                const pending = pendingRender.current;
+                if (pending) await pending;
+                const current = resultRef.current;
+                if (!current) return;
+                const ok = await shareFile(current.uri, 'image/png');
                 if (!ok) setError('Sharing isn’t available here.');
-              })
-            }
+              })();
+            }}
           />
           {result.height <= COPY_MAX_HEIGHT && (
             <GhostButton label="Copy image" onPress={() => void copyImage()} />
@@ -571,25 +661,12 @@ export function StitchScreen({
             />
           )}
           <FullLengthViewer
+            key={result.uri}
             result={result}
             visible={viewer}
             onClose={() => setViewer(false)}
             busy={busy}
-            onApply={async (rects) => {
-              if (busyRef.current) return;
-              busyRef.current = true;
-              setBusy(true);
-              try {
-                setResult(await renderStitch(result, rects, onProgress));
-                notify(rects.length ? `Hid ${rects.length} area${rects.length === 1 ? '' : 's'}` : 'All areas shown again');
-              } catch (e) {
-                setError(e instanceof Error ? e.message : 'Couldn’t update the image.');
-              } finally {
-                busyRef.current = false;
-                setBusy(false);
-                setProgress(null);
-              }
-            }}
+            onApply={applyRedactions}
           />
         </>
       )}
@@ -598,40 +675,122 @@ export function StitchScreen({
 }
 
 /** Shows the stitch by drawing each source frame's used rows — exactly
- *  what was written, without decoding one giant bitmap. */
+ *  what was written, without decoding one giant bitmap. Repairs and the
+ *  one floating-overlay stamp are drawn on top of those rows. */
 function SegmentView({
   frame,
   seg,
   scale,
+  outY,
+  frames,
+  repairs,
+  stamps,
 }: {
   frame: { uri: string; width: number; height: number };
   seg: Segment;
   scale: number;
+  outY: number;
+  frames: { uri: string; width: number; height: number }[];
+  repairs: ColumnRepair[];
+  stamps: OverlayStamp[];
 }) {
+  const segH = seg.to - seg.from;
+  const viewH = previewSpan(seg.from, seg.to, scale);
+  const localRepairs = repairs.filter((r) => r.outY1 > outY && r.outY0 < outY + segH);
+  const localStamps = stamps.filter((s) => s.outY + s.height > outY && s.outY < outY + segH);
+  if (viewH <= 0) return null;
+  const px = (n: number) => Math.round(n * scale);
   return (
-    <View style={{ height: (seg.to - seg.from) * scale, overflow: 'hidden' }}>
+    <View style={{ height: viewH, overflow: 'hidden' }}>
       <Image
         source={{ uri: frame.uri }}
+        resizeMode="stretch"
         style={{
-          width: frame.width * scale,
-          height: frame.height * scale,
-          marginTop: -seg.from * scale,
+          width: px(frame.width),
+          height: px(frame.height),
+          marginTop: -px(seg.from),
         }}
       />
+      {localRepairs.map((r, i) => {
+        const donor = frames[r.frame];
+        if (!donor || scale === 0) return null;
+        const visTop = Math.max(r.outY0, outY);
+        const visBot = Math.min(r.outY1, outY + segH);
+        const srcTop = r.srcY0 + (visTop - r.outY0);
+        return (
+          <View
+            key={`r${i}`}
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              left: px(r.x0),
+              top: px(seg.from + (visTop - outY)) - px(seg.from),
+              width: Math.max(1, px(r.x1) - px(r.x0)),
+              height: Math.max(1, px(srcTop + (visBot - visTop)) - px(srcTop)),
+              overflow: 'hidden',
+            }}
+          >
+            <Image
+              source={{ uri: donor.uri }}
+              resizeMode="stretch"
+              style={{
+                width: px(donor.width),
+                height: px(donor.height),
+                marginTop: -px(srcTop),
+                marginLeft: -px(r.x0),
+              }}
+            />
+          </View>
+        );
+      })}
+      {localStamps.map((s, i) => {
+        const src = frames[s.frame];
+        if (!src || scale === 0) return null;
+        const visTop = Math.max(s.outY, outY);
+        const visBot = Math.min(s.outY + s.height, outY + segH);
+        const srcTop = s.srcY + (visTop - s.outY);
+        return (
+          <View
+            key={`s${i}`}
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              left: px(s.outX),
+              top: px(seg.from + (visTop - outY)) - px(seg.from),
+              width: Math.max(1, px(s.outX + s.width) - px(s.outX)),
+              height: Math.max(1, px(srcTop + (visBot - visTop)) - px(srcTop)),
+              overflow: 'hidden',
+            }}
+          >
+            <Image
+              source={{ uri: src.uri }}
+              resizeMode="stretch"
+              style={{
+                width: px(src.width),
+                height: px(src.height),
+                marginTop: -px(srcTop),
+                marginLeft: -px(s.srcX),
+              }}
+            />
+          </View>
+        );
+      })}
     </View>
   );
 }
 
 function SegmentsPreview({ result, maxHeight }: { result: StitchResult; maxHeight: number }) {
+  const { styles } = useThemed(makeStyles);
   const [width, setWidth] = useState(0);
   const scale = width > 0 ? width / result.width : 0;
   const shown = useMemo(() => {
-    const out: Segment[] = [];
+    const out: { seg: Segment; outY: number }[] = [];
     let h = 0;
+    let outY = 0;
     for (const seg of result.segments) {
-      if (h >= maxHeight || scale === 0) break;
-      out.push(seg);
-      h += (seg.to - seg.from) * scale;
+      if (h < maxHeight && scale !== 0) out.push({ seg, outY });
+      h += previewSpan(seg.from, seg.to, scale);
+      outY += seg.to - seg.from;
     }
     return out;
   }, [result, scale, maxHeight]);
@@ -640,8 +799,17 @@ function SegmentsPreview({ result, maxHeight }: { result: StitchResult; maxHeigh
       style={[styles.preview, { maxHeight }]}
       onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
     >
-      {shown.map((seg, i) => (
-        <SegmentView key={i} frame={result.frames[seg.frame]!} seg={seg} scale={scale} />
+      {shown.map(({ seg, outY }, i) => (
+        <SegmentView
+          key={i}
+          frame={result.frames[seg.frame]!}
+          seg={seg}
+          scale={scale}
+          outY={outY}
+          frames={result.frames}
+          repairs={result.repairs}
+          stamps={result.stamps}
+        />
       ))}
       {result.redactions.map((r, i) => (
         <HiddenBox key={i} r={r} scale={scale} offset={0} />
@@ -651,7 +819,20 @@ function SegmentsPreview({ result, maxHeight }: { result: StitchResult; maxHeigh
 }
 
 /** How a hidden area looks in previews (the saved image is pixelated). */
-function HiddenBox({ r, scale, offset, pending }: { r: Redaction; scale: number; offset: number; pending?: boolean }) {
+function HiddenBox({
+  r,
+  scale,
+  offset,
+  pending,
+  night,
+}: {
+  r: Redaction;
+  scale: number;
+  offset: number;
+  pending?: boolean;
+  night?: boolean;
+}) {
+  const { styles } = useThemed(makeStyles, night ? dark : undefined);
   return (
     <View
       pointerEvents="none"
@@ -679,13 +860,15 @@ function FullLengthViewer({
   result: StitchResult;
   visible: boolean;
   onClose: () => void;
-  onApply: (rects: Redaction[]) => void;
+  onApply: (rects: Redaction[]) => Promise<boolean>;
   busy: boolean;
 }) {
+  const { styles } = useThemed(makeStyles, dark);
   const insets = useSafeAreaInsets();
   const [width, setWidth] = useState(0);
   const [hiding, setHiding] = useState(false);
-  const [rects, setRects] = useState<Redaction[]>(result.redactions);
+  const boxes = useUndoHistory<Redaction[]>(result.redactions);
+  const rects = boxes.present;
   const [draft, setDraft] = useState<Redaction | null>(null);
   const scrollY = useRef(0);
   const [scrollShown, setScrollShown] = useState(0);
@@ -695,10 +878,19 @@ function FullLengthViewer({
     let at = 0;
     for (const s of result.segments) {
       out.push(at);
-      at += (s.to - s.from) * scale;
+      at += previewSpan(s.from, s.to, scale);
     }
     return out;
   }, [result, scale]);
+  const outYs = useMemo(() => {
+    const ys: number[] = [];
+    let y = 0;
+    for (const s of result.segments) {
+      ys.push(y);
+      y += s.to - s.from;
+    }
+    return ys;
+  }, [result.segments]);
 
   const scaleRef = useRef(scale);
   useEffect(() => {
@@ -726,7 +918,7 @@ function FullLengthViewer({
   const onRelease = () => {
     setDraft((d) => {
       if (d && d.width * scaleRef.current > 12 && d.height * scaleRef.current > 8) {
-        setRects((all) => [...all, d]);
+        boxes.commit((all) => [...all, d]);
       }
       return null;
     });
@@ -757,17 +949,29 @@ function FullLengthViewer({
                 setScrollShown(scrollY.current);
               }}
               scrollEventThrottle={32}
-              renderItem={({ item }) => (
-                <SegmentView frame={result.frames[item.frame]!} seg={item} scale={scale} />
+              renderItem={({ item, index }) => (
+                <SegmentView
+                  frame={result.frames[item.frame]!}
+                  seg={item}
+                  scale={scale}
+                  outY={outYs[index] ?? 0}
+                  frames={result.frames}
+                  repairs={result.repairs}
+                  stamps={result.stamps}
+                />
               )}
               getItemLayout={(_, index) => {
                 const s = result.segments[index]!;
-                return { length: (s.to - s.from) * scale, offset: offsets[index] ?? 0, index };
+                return {
+                  length: previewSpan(s.from, s.to, scale),
+                  offset: offsets[index] ?? 0,
+                  index,
+                };
               }}
               windowSize={5}
               initialNumToRender={4}
               maxToRenderPerBatch={3}
-              removeClippedSubviews
+              removeClippedSubviews={false}
             />
           )}
           <View
@@ -781,16 +985,19 @@ function FullLengthViewer({
             onResponderTerminate={onRelease}
           >
             {rects.map((r, i) => (
-              <HiddenBox key={i} r={r} scale={scale} offset={scrollShown} />
+              <HiddenBox key={i} r={r} scale={scale} offset={scrollShown} night />
             ))}
-            {draft && <HiddenBox r={draft} scale={scale} offset={scrollShown} pending />}
+            {draft && <HiddenBox r={draft} scale={scale} offset={scrollShown} pending night />}
           </View>
         </View>
         <View style={[styles.viewerTools, { paddingBottom: insets.bottom + 8 }]}>
           {hiding ? (
             <>
-              <Pressable onPress={() => setRects((all) => all.slice(0, -1))} hitSlop={8}>
-                <Text style={styles.toolText}>Undo</Text>
+              <Pressable onPress={() => boxes.undo()} disabled={!boxes.canUndo} hitSlop={8}>
+                <Text style={[styles.toolText, !boxes.canUndo && styles.toolOff]}>Undo</Text>
+              </Pressable>
+              <Pressable onPress={() => boxes.redo()} disabled={!boxes.canRedo} hitSlop={8}>
+                <Text style={[styles.toolText, !boxes.canRedo && styles.toolOff]}>Redo</Text>
               </Pressable>
               <Pressable onPress={() => setHiding(false)} hitSlop={8}>
                 <Text style={styles.toolText}>Scroll</Text>
@@ -798,8 +1005,14 @@ function FullLengthViewer({
               <Pressable
                 disabled={busy || !changed}
                 onPress={() => {
-                  setHiding(false);
-                  onApply(rects);
+                  // Stay in hiding mode until the redacted file is committed.
+                  // "Hide details" is the signal that Apply finished; leaving
+                  // early let Save run against the unredacted image and let
+                  // the later "Hid N areas" toast replace "Saved to Photos".
+                  void (async () => {
+                    const ok = await onApply(rects);
+                    if (ok) setHiding(false);
+                  })();
                 }}
                 hitSlop={8}
               >
@@ -819,7 +1032,7 @@ function FullLengthViewer({
                 </Text>
               )}
               {changed && (
-                <Pressable disabled={busy} onPress={() => onApply(rects)} hitSlop={8}>
+                <Pressable disabled={busy} onPress={() => void onApply(rects)} hitSlop={8}>
                   <Text style={[styles.toolText, styles.toolPrimary]}>{busy ? 'Saving…' : 'Apply'}</Text>
                 </Pressable>
               )}
@@ -831,57 +1044,61 @@ function FullLengthViewer({
   );
 }
 
-const styles = StyleSheet.create({
-  spaced: { marginTop: 10 },
-  rowGap: { marginTop: 10, gap: 4 },
-  thumbs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  thumbWrap: { width: 72, alignItems: 'center', gap: 4 },
-  thumb: { width: 72, height: 108, borderRadius: 10, backgroundColor: colors.border },
-  thumbIndex: {
-    position: 'absolute',
-    top: 4,
-    left: 4,
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 6,
-    paddingHorizontal: 5,
-    overflow: 'hidden',
-  },
-  thumbActions: { flexDirection: 'row', justifyContent: 'space-between', width: '100%' },
-  thumbBtn: { fontSize: 18, fontWeight: '700', color: colors.accent, paddingHorizontal: 4 },
-  progress: { textAlign: 'center' },
-  resultCard: { alignItems: 'stretch', gap: 10 },
-  preview: { width: '100%', overflow: 'hidden', borderRadius: 10, backgroundColor: colors.border },
-  center: { textAlign: 'center' },
-  error: { color: colors.danger, fontSize: 15 },
-  viewer: { flex: 1, backgroundColor: '#000' },
-  viewerBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  viewerTitle: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
-  viewerClose: { color: '#4DA3FF', fontSize: 17, fontWeight: '700' },
-  flex: { flex: 1 },
-  viewerTools: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    backgroundColor: '#111',
-  },
-  toolText: { color: '#FFFFFF', fontSize: 17, fontWeight: '600' },
-  toolPrimary: { color: '#4DA3FF', fontWeight: '800' },
-  toolNote: { color: '#AAA', fontSize: 14 },
-  hidden: {
-    position: 'absolute',
-    backgroundColor: 'rgba(120,120,128,0.92)',
-    borderRadius: 3,
-  },
-  hiddenPending: { backgroundColor: 'rgba(77,163,255,0.35)', borderWidth: 2, borderColor: '#4DA3FF' },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    spaced: { marginTop: 10 },
+    rowGap: { marginTop: 10, gap: 4 },
+    thumbs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    thumbWrap: { width: 72, alignItems: 'center', gap: 4 },
+    thumb: { width: 72, height: 108, borderRadius: 10, backgroundColor: p.mediaTrack },
+    thumbIndex: {
+      position: 'absolute',
+      top: 4,
+      left: 4,
+      fontSize: 12,
+      fontWeight: '800',
+      color: p.onMedia,
+      backgroundColor: p.scrim,
+      borderRadius: 6,
+      paddingHorizontal: 5,
+      overflow: 'hidden',
+    },
+    thumbActions: { flexDirection: 'row', justifyContent: 'space-between', width: '100%' },
+    thumbBtn: { fontSize: 18, fontWeight: '700', color: p.primary, paddingHorizontal: 4 },
+    progress: { textAlign: 'center' },
+    resultCard: { alignItems: 'stretch', gap: 10 },
+    preview: { width: '100%', overflow: 'hidden', borderRadius: 10, backgroundColor: p.surface },
+    center: { textAlign: 'center' },
+    warning: { color: p.warning, fontSize: 15, textAlign: 'center' },
+    error: { color: p.destructive, fontSize: 15 },
+    viewer: { flex: 1, backgroundColor: p.media },
+    viewerBar: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+    },
+    viewerTitle: { color: p.onMedia, fontSize: 15, fontWeight: '600' },
+    viewerClose: { color: p.primary, fontSize: 17, fontWeight: '700' },
+    flex: { flex: 1 },
+    viewerTools: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: 20,
+      paddingTop: 12,
+      backgroundColor: p.mediaRaised,
+    },
+    toolText: { color: p.onMedia, fontSize: 17, fontWeight: '600' },
+    toolPrimary: { color: p.primary, fontWeight: '800' },
+    toolOff: { opacity: 0.35 },
+    toolNote: { color: p.textSecondary, fontSize: 14 },
+    hidden: {
+      position: 'absolute',
+      backgroundColor: p.hideFill,
+      borderRadius: 3,
+    },
+    hiddenPending: { backgroundColor: p.primaryWash, borderWidth: 2, borderColor: p.primary },
+  });
+}

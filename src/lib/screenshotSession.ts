@@ -76,6 +76,8 @@ export async function sessionShots(startMs: number): Promise<SessionShot[]> {
   for (const meta of picked) {
     // localUri is a real file:// path the image pipeline can read
     // (iCloud-only originals are downloaded by Photos on request).
+    // PhotoKit only: if the screenshot lives in iCloud, download that
+    // original so it can be stitched on this phone. Not a service call.
     const info = await MediaLibrary.getAssetInfoAsync(meta.id, {
       shouldDownloadFromNetwork: true,
     });

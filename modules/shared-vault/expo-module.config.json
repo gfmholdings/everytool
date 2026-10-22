@@ -1,1 +1,7 @@
-{"apple":{"modules":["EverytoolSharedVaultModule"]},"platforms":["apple"]}
+{
+  "apple": {
+    "modules": ["EverytoolSharedVaultModule"],
+    "appDelegateSubscribers": ["PdfDocumentHandler"]
+  },
+  "platforms": ["apple"]
+}

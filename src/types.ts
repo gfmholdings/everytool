@@ -47,13 +47,31 @@ export interface Countdown {
   /** Local-midnight date of the event, ms since epoch. */
   date: number;
   createdAt: number;
+  /**
+   * When true, today counts as day 1 (Between counts both ends).
+   * Missing on older saved rows, which keep the original exclusive count.
+   */
+  includeToday?: boolean;
 }
 
+/** What the QR encodes. Stored with every generated code. */
+export type QrContentType = 'url' | 'text' | 'wifi' | 'contact' | 'email' | 'phone';
+
+/** Colors used to draw the code. Defaults are black on white. */
+export interface QrStyle {
+  foreground: string;
+  background: string;
+}
+
+/** One generated or scanned QR, kept on this phone. Newest first. */
 export interface QrHistoryItem {
   id: string;
   direction: 'made' | 'scanned';
-  kind: string; // "Text" / "Wi-Fi network" / "Contact" / "Link" …
+  /** Short label, e.g. "URL" or "Wi-Fi". */
+  kind: string;
+  type: QrContentType;
   payload: string;
+  style: QrStyle;
   createdAt: number;
 }
 

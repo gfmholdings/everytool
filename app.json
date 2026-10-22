@@ -73,18 +73,72 @@
     "icon": "./assets/icon.png",
     "ios": {
       "appleTeamId": "8H56KM6SCW",
+      "buildNumber": "12",
       "bundleIdentifier": "app.everytool.ios",
       "entitlements": {
         "com.apple.security.application-groups": [
           "group.app.everytool.ios"
         ]
       },
+      "privacyManifests": {
+        "NSPrivacyTracking": false,
+        "NSPrivacyTrackingDomains": [],
+        "NSPrivacyCollectedDataTypes": [],
+        "NSPrivacyAccessedAPITypes": [
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryUserDefaults",
+            "NSPrivacyAccessedAPITypeReasons": ["1C8F.1"]
+          }
+        ]
+      },
       "infoPlist": {
-        "NSCameraUsageDescription": "Everytool uses the camera to scan QR codes and receipts. Everything is read on this phone.",
+        "NSCameraUsageDescription": "Everytool uses the camera to scan QR codes, receipts, and pages for a PDF. Everything is read on this phone.",
         "NSMicrophoneUsageDescription": "Everytool never records audio. This is only requested if you start a screen recording that includes sound.",
         "NSPhotoLibraryAddUsageDescription": "Everytool saves finished screenshots, images and GIFs to your photo library.",
         "NSPhotoLibraryUsageDescription": "Everytool reads the photos you pick \u2014 and, in a screenshot session, the screenshots you take \u2014 so it can stitch, convert, resize, scan and make GIFs, all on this phone.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "UTExportedTypeDeclarations": [
+          {
+            "UTTypeIdentifier": "app.everytool.ios.etsplit",
+            "UTTypeDescription": "Everytool split group",
+            "UTTypeConformsTo": ["public.data", "public.content"],
+            "UTTypeTagSpecification": {
+              "public.filename-extension": ["etsplit"],
+              "public.mime-type": "application/vnd.everytool.etsplit+json"
+            }
+          }
+        ],
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "PDF",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": ["com.adobe.pdf"]
+          },
+          {
+            "CFBundleTypeName": "Document",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": [
+              "public.plain-text",
+              "public.utf8-plain-text",
+              "public.rtf",
+              "public.rtfd",
+              "public.html",
+              "public.comma-separated-values-text",
+              "net.daringfireball.markdown",
+              "com.apple.webarchive"
+            ]
+          },
+          {
+            "CFBundleTypeName": "Everytool split group",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Owner",
+            "LSItemContentTypes": ["app.everytool.ios.etsplit"]
+          }
+        ],
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "UISupportsDocumentBrowser": true
       },
       "supportsTablet": false
     },
@@ -97,6 +151,7 @@
       "expo-image-picker",
       "expo-camera",
       "expo-media-library",
+      "expo-updates",
       "@react-native-community/datetimepicker",
       "./plugins/withOpenToolIntent.js"
     ],
@@ -106,7 +161,13 @@
     "scheme": "everytool",
     "slug": "everytool",
     "updates": {
-      "url": "https://u.expo.dev/74d5cac4-d621-4281-af33-4305f1a3eba8"
+      "enabled": true,
+      "url": "https://u.expo.dev/74d5cac4-d621-4281-af33-4305f1a3eba8",
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0,
+      "requestHeaders": {
+        "expo-channel-name": "production"
+      }
     },
     "userInterfaceStyle": "automatic",
     "version": "1.0.0",

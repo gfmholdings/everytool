@@ -4,6 +4,7 @@ module.exports = function (config) {
     type: 'widget',
     name: 'EverytoolControls',
     displayName: 'Everytool Controls',
+    bundleIdentifier: '.widget',
     icon: '../../assets/icon.png',
     // ControlWidgets (Control Center controls) need iOS 18.
     deploymentTarget: '18.0',

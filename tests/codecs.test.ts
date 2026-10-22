@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   decodePngRows,
+  decodePngRowsAsync,
   inflateRaw,
   PngStreamWriter,
 } from '../src/lib/deflate.ts';
@@ -49,6 +50,27 @@ test('PNG roundtrip: writer output decodes back exactly', () => {
   assert.equal(info.width, w);
   assert.equal(info.height, h);
   assert.deepEqual(new Uint8Array(rows), rgba);
+});
+
+test('decodePngRowsAsync matches decodePngRows, including a yield and an early stop', async () => {
+  const w = 40;
+  const h = 100;
+  const rgba = pattern(w, h, (x, y) => (x * 3 + y * 11) % 256);
+  const png = collectPng(w, h, rgba);
+
+  const syncRows: number[] = [];
+  const syncInfo = decodePngRows(png, (_y, row) => syncRows.push(...row));
+  const asyncRows: number[] = [];
+  const asyncInfo = await decodePngRowsAsync(png, (_y, row) => asyncRows.push(...row.slice()));
+  assert.equal(asyncInfo.width, syncInfo.width);
+  assert.equal(asyncInfo.height, syncInfo.height);
+  assert.equal(asyncInfo.channels, syncInfo.channels);
+  assert.deepEqual(new Uint8Array(asyncRows), new Uint8Array(syncRows));
+
+  const prefix: number[] = [];
+  await decodePngRowsAsync(png, (_y, row) => prefix.push(...row.slice()), 10);
+  assert.equal(prefix.length, 11 * w * 4);
+  assert.deepEqual(new Uint8Array(prefix), rgba.subarray(0, 11 * w * 4));
 });
 
 test('decodePngRows: JPEG bytes are named, not called an unsupported PNG', () => {

@@ -12,7 +12,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path, Rect, Circle } from 'react-native-svg';
 
-import { colors, space, type } from '../theme';
+import { useTheme } from '../useTheme';
+import { space, type Palette } from '../theme';
 import type { ToolId } from '../types';
 
 export function Card({
@@ -22,22 +23,25 @@ export function Card({
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
 }) {
-  return <View style={[styles.card, style]}>{children}</View>;
+  const { palette } = useTheme();
+  return (
+    <View style={[stylesOf(palette).card, style]}>{children}</View>
+  );
 }
 
 export function PrimaryButton({
   label,
   onPress,
   disabled,
-  orange,
   testID,
 }: {
   label: string;
   onPress: () => void;
   disabled?: boolean;
-  orange?: boolean;
   testID?: string;
 }) {
+  const { palette } = useTheme();
+  const styles = stylesOf(palette);
   return (
     <Pressable
       accessibilityRole="button"
@@ -47,7 +51,7 @@ export function PrimaryButton({
       onPress={onPress}
       style={({ pressed }) => [
         styles.primary,
-        { backgroundColor: orange ? colors.orange : colors.accent },
+        { backgroundColor: palette.primary },
         pressed && { opacity: 0.75 },
         disabled && { opacity: 0.4 },
       ]}
@@ -66,6 +70,8 @@ export function GhostButton({
   onPress: () => void;
   testID?: string;
 }) {
+  const { palette } = useTheme();
+  const styles = stylesOf(palette);
   return (
     <Pressable
       accessibilityRole="button"
@@ -79,34 +85,63 @@ export function GhostButton({
   );
 }
 
-/** A screen for one tool: title, one primary action zone, plain words. */
+export type UndoControls = {
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+};
+
+/** A screen for one tool: title, undo and redo when the tool edits, one action zone. */
 export function ToolShell({
   title,
   onBack,
+  undo,
   children,
 }: {
   title: string;
   onBack: () => void;
+  undo?: UndoControls;
   children: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
+  const { palette, type } = useTheme();
+  const styles = stylesOf(palette);
   return (
     <View style={[styles.shell, { paddingTop: insets.top }]}>
       <View style={styles.shellHeader}>
-        <Pressable
-          accessibilityLabel="Back"
-          onPress={onBack}
-          style={styles.backButton}
-        >
+        <Pressable accessibilityLabel="Back" onPress={onBack} style={styles.backButton}>
           <Text style={styles.backChevron}>‹</Text>
         </Pressable>
-        <Text style={type.h2}>{title}</Text>
-        <View style={styles.backButton} />
+        <Text style={[type.h2, styles.title]}>{title}</Text>
+        <View style={styles.undoSlot}>
+          {undo && (
+            <>
+              <Pressable
+                accessibilityLabel="Undo"
+                accessibilityState={{ disabled: !undo.canUndo }}
+                disabled={!undo.canUndo}
+                onPress={undo.onUndo}
+                hitSlop={6}
+                style={styles.undoButton}
+              >
+                <Text style={[styles.undoIcon, !undo.canUndo && styles.undoOff]}>↩</Text>
+              </Pressable>
+              <Pressable
+                accessibilityLabel="Redo"
+                accessibilityState={{ disabled: !undo.canRedo }}
+                disabled={!undo.canRedo}
+                onPress={undo.onRedo}
+                hitSlop={6}
+                style={styles.undoButton}
+              >
+                <Text style={[styles.undoIcon, !undo.canRedo && styles.undoOff]}>↪</Text>
+              </Pressable>
+            </>
+          )}
+        </View>
       </View>
-      <ScrollView
-        contentContainerStyle={styles.shellBody}
-        keyboardShouldPersistTaps="handled"
-      >
+      <ScrollView contentContainerStyle={styles.shellBody} keyboardShouldPersistTaps="handled">
         {children}
       </ScrollView>
     </View>
@@ -132,6 +167,8 @@ export function Field({
   testID?: string;
   secure?: boolean;
 }) {
+  const { palette } = useTheme();
+  const styles = stylesOf(palette);
   return (
     <TextInput
       testID={testID}
@@ -141,14 +178,10 @@ export function Field({
       value={value}
       onChangeText={onChange}
       placeholder={placeholder}
-      placeholderTextColor={colors.faint}
+      placeholderTextColor={palette.textSecondary}
       keyboardType={keyboard ?? 'default'}
       multiline={multiline}
-      style={[
-        styles.field,
-        multiline && styles.fieldMulti,
-        mono && { fontFamily: 'Menlo' },
-      ]}
+      style={[styles.field, multiline && styles.fieldMulti, mono && { fontFamily: 'Menlo' }]}
     />
   );
 }
@@ -162,6 +195,8 @@ export function Segmented<T extends string>({
   value: T;
   onChange: (v: T) => void;
 }) {
+  const { palette } = useTheme();
+  const styles = stylesOf(palette);
   return (
     <View style={styles.segmented}>
       {options.map((o) => {
@@ -173,9 +208,7 @@ export function Segmented<T extends string>({
             onPress={() => onChange(o.id)}
             style={[styles.segItem, active && styles.segItemActive]}
           >
-            <Text style={[styles.segLabel, active && styles.segLabelActive]}>
-              {o.label}
-            </Text>
+            <Text style={[styles.segLabel, active && styles.segLabelActive]}>{o.label}</Text>
           </Pressable>
         );
       })}
@@ -185,7 +218,8 @@ export function Segmented<T extends string>({
 
 /** The ten tool glyphs, drawn the same way the mockup draws them. */
 export function ToolGlyph({ id, size = 24 }: { id: ToolId; size?: number }) {
-  const stroke = '#FFFFFF';
+  const { palette } = useTheme();
+  const stroke = palette.onPrimary;
   const sw = 1.8;
   const common = {
     width: size,
@@ -274,60 +308,67 @@ export function ToolGlyph({ id, size = 24 }: { id: ToolId; size?: number }) {
   }
 }
 
-const styles = StyleSheet.create({
-  card: {
-    backgroundColor: colors.card,
-    borderRadius: space.radius,
-    padding: space.cardPad,
-  },
-  primary: {
-    borderRadius: 14,
-    paddingVertical: 15,
-    alignItems: 'center',
-  },
-  primaryLabel: { color: '#FFFFFF', fontSize: 17, fontWeight: '700' },
-  ghost: { paddingVertical: 10, alignItems: 'center' },
-  ghostLabel: { color: colors.accent, fontSize: 16, fontWeight: '600' },
-  shell: { flex: 1, backgroundColor: colors.bg },
-  shellHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingTop: 8,
-    paddingBottom: 4,
-  },
-  backButton: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  backChevron: { fontSize: 34, color: colors.accent, marginTop: -4 },
-  shellBody: { padding: space.screen, gap: space.gap, paddingBottom: 40 },
-  field: {
-    backgroundColor: colors.card,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: colors.ink,
-  },
-  fieldMulti: { minHeight: 140, textAlignVertical: 'top' },
-  segmented: {
-    flexDirection: 'row',
-    backgroundColor: colors.border,
-    borderRadius: 12,
-    padding: 2,
-    gap: 2,
-  },
-  segItem: {
-    flex: 1,
-    paddingVertical: 9,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  segItemActive: { backgroundColor: colors.card },
-  segLabel: { fontSize: 14.5, fontWeight: '600', color: colors.muted },
-  segLabelActive: { color: colors.ink },
-});
+function stylesOf(p: Palette) {
+  return StyleSheet.create({
+    card: {
+      backgroundColor: p.surface,
+      borderRadius: space.radius,
+      padding: space.cardPad,
+    },
+    primary: {
+      borderRadius: 14,
+      paddingVertical: 15,
+      alignItems: 'center',
+    },
+    primaryLabel: { color: p.onPrimary, fontSize: 17, fontWeight: '700' },
+    ghost: { paddingVertical: 10, alignItems: 'center' },
+    ghostLabel: { color: p.primary, fontSize: 16, fontWeight: '600' },
+    shell: { flex: 1, backgroundColor: p.background },
+    shellHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 8,
+      paddingTop: 8,
+      paddingBottom: 4,
+      gap: 4,
+    },
+    backButton: {
+      width: 44,
+      height: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    backChevron: { fontSize: 34, color: p.primary, marginTop: -4 },
+    title: { flex: 1 },
+    undoSlot: { flexDirection: 'row', minWidth: 44, justifyContent: 'flex-end' },
+    undoButton: { width: 36, height: 44, alignItems: 'center', justifyContent: 'center' },
+    undoIcon: { fontSize: 22, color: p.primary, fontWeight: '700' },
+    undoOff: { opacity: 0.28 },
+    shellBody: { padding: space.screen, gap: space.gap, paddingBottom: 40 },
+    field: {
+      backgroundColor: p.surface,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      fontSize: 16,
+      color: p.textPrimary,
+    },
+    fieldMulti: { minHeight: 140, textAlignVertical: 'top' },
+    segmented: {
+      flexDirection: 'row',
+      backgroundColor: p.secondary,
+      borderRadius: 12,
+      padding: 2,
+      gap: 2,
+    },
+    segItem: {
+      flex: 1,
+      paddingVertical: 9,
+      borderRadius: 10,
+      alignItems: 'center',
+    },
+    segItemActive: { backgroundColor: p.surface },
+    segLabel: { fontSize: 14.5, fontWeight: '600', color: p.textSecondary },
+    segLabelActive: { color: p.textPrimary },
+  });
+}

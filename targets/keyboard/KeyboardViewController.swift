@@ -8,6 +8,8 @@ import UIKit
 ///   Group) and the system pasteboard. Paste, Copy, Cut and Save act on
 ///   the text field you are typing in; each saved clip can be inserted,
 ///   copied, edited (typed with these same keys), pinned or deleted.
+///   Open it from the Clipboard key on the bottom row (the top tabs sit
+///   in space iOS may clip when the keyboard height isn't honoured).
 /// - Text tools: counts and extraction over the text around the cursor.
 ///
 /// iOS rules this keyboard lives by:
@@ -68,17 +70,23 @@ final class KeyboardViewController: UIInputViewController {
       rootStack.topAnchor.constraint(equalTo: view.topAnchor, constant: 6),
       rootStack.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -4),
     ])
+    // 999, not defaultHigh (750). The system keyboard-height constraint
+    // beats 750 and then clips whatever we stacked above the keys — which
+    // was the only Clipboard entry. 999 is what iOS expects a custom
+    // keyboard to use so this height actually wins.
     let h = view.heightAnchor.constraint(equalToConstant: 284)
-    h.priority = .defaultHigh
+    h.priority = UILayoutPriority(rawValue: 999)
     h.isActive = true
     heightConstraint = h
+    view.backgroundColor = Palette.keyboardBackground
+    view.tintColor = Palette.primary
     buildTabBar()
     rootStack.addArrangedSubview(tabBar)
     rootStack.addArrangedSubview(content)
 
     toast.font = .systemFont(ofSize: 13, weight: .semibold)
-    toast.textColor = .white
-    toast.backgroundColor = UIColor.black.withAlphaComponent(0.78)
+    toast.textColor = Palette.onToast
+    toast.backgroundColor = Palette.toast
     toast.textAlignment = .center
     toast.layer.cornerRadius = 10
     toast.clipsToBounds = true
@@ -140,12 +148,18 @@ final class KeyboardViewController: UIInputViewController {
       b.setTitle(title, for: .normal)
       b.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
       b.layer.cornerRadius = 8
+      b.clipsToBounds = true
+      b.titleLabel?.adjustsFontSizeToFitWidth = true
+      b.titleLabel?.minimumScaleFactor = 0.7
       b.tag = t.rawValue
       b.accessibilityIdentifier = "kb.tab.\(title)"
       b.addTarget(self, action: #selector(tabTapped(_:)), for: .touchUpInside)
       tabBar.addArrangedSubview(b)
     }
     tabBar.heightAnchor.constraint(equalToConstant: 32).isActive = true
+    // Don't let a short keyboard squash this row to nothing.
+    tabBar.setContentCompressionResistancePriority(.required, for: .vertical)
+    tabBar.setContentHuggingPriority(.required, for: .vertical)
   }
 
   @objc private func tabTapped(_ sender: UIButton) {
@@ -155,10 +169,10 @@ final class KeyboardViewController: UIInputViewController {
   private func styleTabBar() {
     for case let b as UIButton in tabBar.arrangedSubviews {
       let active = b.tag == currentTab.rawValue
-      b.backgroundColor = active
-        ? UIColor.systemBlue
-        : UIColor.secondarySystemBackground.withAlphaComponent(0.7)
-      b.setTitleColor(active ? .white : .label, for: .normal)
+      b.backgroundColor = active ? Palette.primary : Palette.surface
+      b.setTitleColor(active ? Palette.onPrimary : Palette.textPrimary, for: .normal)
+      b.layer.borderWidth = active ? 0 : 1
+      b.layer.borderColor = Palette.separator.cgColor
     }
   }
 
@@ -181,22 +195,6 @@ final class KeyboardViewController: UIInputViewController {
 
   // MARK: - Keys tab
 
-  private var keyBackground: UIColor {
-    UIColor { traits in
-      traits.userInterfaceStyle == .dark
-        ? UIColor(white: 0.32, alpha: 1)
-        : .white
-    }
-  }
-
-  private var specialBackground: UIColor {
-    UIColor { traits in
-      traits.userInterfaceStyle == .dark
-        ? UIColor(white: 0.18, alpha: 1)
-        : UIColor(red: 0.72, green: 0.74, blue: 0.78, alpha: 1)
-    }
-  }
-
   private func makeKey(
     _ title: String,
     special: Bool = false,
@@ -205,14 +203,14 @@ final class KeyboardViewController: UIInputViewController {
   ) -> UIButton {
     let b = UIButton(type: .system)
     b.setTitle(title, for: .normal)
-    b.setTitleColor(.label, for: .normal)
+    b.setTitleColor(Palette.textPrimary, for: .normal)
     b.titleLabel?.font = .systemFont(ofSize: fontSize)
     b.titleLabel?.lineBreakMode = .byTruncatingTail
     b.titleLabel?.adjustsFontSizeToFitWidth = true
     b.titleLabel?.minimumScaleFactor = 0.6
-    b.backgroundColor = special ? specialBackground : keyBackground
+    b.backgroundColor = special ? Palette.keySpecial : Palette.keyBackground
     b.layer.cornerRadius = 6
-    b.layer.shadowColor = UIColor.black.cgColor
+    b.layer.shadowColor = Palette.media.cgColor
     b.layer.shadowOffset = CGSize(width: 0, height: 1)
     b.layer.shadowOpacity = 0.25
     b.layer.shadowRadius = 0
@@ -274,7 +272,7 @@ final class KeyboardViewController: UIInputViewController {
         let title = capsLock ? "⇪" : (shifted ? "⬆︎" : "⇧")
         let shift = makeKey(title, special: true, fontSize: 18)
         shift.accessibilityLabel = capsLock ? "Caps lock" : "Shift"
-        shift.backgroundColor = (shifted || capsLock) ? .white : specialBackground
+        shift.backgroundColor = (shifted || capsLock) ? Palette.keyBackground : Palette.keySpecial
         shift.addTarget(self, action: #selector(shiftTapped), for: .touchUpInside)
         keys.append(shift)
       }
@@ -305,10 +303,19 @@ final class KeyboardViewController: UIInputViewController {
       stack.addArrangedSubview(keyRow(keys))
     }
 
-    // Bottom row: page toggle, [globe], cursor left, space, cursor right, return.
+    // Bottom row: page toggle, Clipboard, [globe], cursor, space, return.
+    // Clipboard is on this row on purpose — it stays on screen even when
+    // the tab strip above the keys is clipped.
     let toggle = makeKey(symbols ? "ABC" : "123", special: true, fontSize: 16)
     toggle.addTarget(self, action: #selector(pageTapped), for: .touchUpInside)
-    var bottomKeys: [UIButton] = [toggle]
+    let clips = makeKey("Clipboard", special: true, fontSize: 12)
+    clips.setTitleColor(Palette.onPrimary, for: .normal)
+    clips.backgroundColor = Palette.primary
+    clips.accessibilityLabel = "Clipboard"
+    clips.accessibilityIdentifier = "kb.toolbar.clipboard"
+    clips.titleLabel?.font = .systemFont(ofSize: 12, weight: .bold)
+    clips.addTarget(self, action: #selector(clipboardKeyTapped), for: .touchUpInside)
+    var bottomKeys: [UIButton] = [toggle, clips]
     var globe: UIButton?
     if needsInputModeSwitchKey {
       let g = makeKey("🌐", special: true, fontSize: 16)
@@ -337,12 +344,21 @@ final class KeyboardViewController: UIInputViewController {
     bottom.axis = .horizontal
     bottom.spacing = 5
     bottom.distribution = .fill
-    toggle.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.13).isActive = true
+    toggle.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.12).isActive = true
+    clips.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.23).isActive = true
     globe?.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.1).isActive = true
-    left.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.09).isActive = true
-    right.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.09).isActive = true
-    ret.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.16).isActive = true
+    left.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.08).isActive = true
+    right.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.08).isActive = true
+    ret.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.15).isActive = true
     stack.addArrangedSubview(bottom)
+  }
+
+  @objc private func clipboardKeyTapped() {
+    showTab(.clipboard)
+  }
+
+  @objc private func keysTapped() {
+    showTab(.keys)
   }
 
   /// The clip editor: shows the draft (typed with these keys), Save and
@@ -358,10 +374,10 @@ final class KeyboardViewController: UIInputViewController {
       ? (editor.id == nil ? "New clip — type it below" : "Empty")
       : editor.text + "▏"
     label.font = .systemFont(ofSize: 14)
-    label.textColor = editor.text.isEmpty ? .secondaryLabel : .label
+    label.textColor = editor.text.isEmpty ? Palette.textSecondary : Palette.textPrimary
     label.numberOfLines = 2
     label.lineBreakMode = .byTruncatingHead
-    label.backgroundColor = keyBackground
+    label.backgroundColor = Palette.keyBackground
     label.layer.cornerRadius = 8
     label.clipsToBounds = true
     label.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -370,8 +386,8 @@ final class KeyboardViewController: UIInputViewController {
 
     let cancel = smallButton("Cancel", tag: 0, action: #selector(editorCancel))
     let save = smallButton("Save", tag: 0, action: #selector(editorSave))
-    save.backgroundColor = .systemBlue
-    save.setTitleColor(.white, for: .normal)
+    save.backgroundColor = Palette.primary
+    save.setTitleColor(Palette.onPrimary, for: .normal)
     cancel.widthAnchor.constraint(equalToConstant: 66).isActive = true
     save.widthAnchor.constraint(equalToConstant: 58).isActive = true
     bar.addArrangedSubview(label)
@@ -552,8 +568,8 @@ final class KeyboardViewController: UIInputViewController {
     b.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
     b.titleLabel?.adjustsFontSizeToFitWidth = true
     b.titleLabel?.minimumScaleFactor = 0.7
-    b.setTitleColor(.label, for: .normal)
-    b.backgroundColor = keyBackground
+    b.setTitleColor(Palette.textPrimary, for: .normal)
+    b.backgroundColor = Palette.keyBackground
     b.layer.cornerRadius = 8
     b.tag = tag
     b.heightAnchor.constraint(equalToConstant: 34).isActive = true
@@ -580,6 +596,21 @@ final class KeyboardViewController: UIInputViewController {
       outer.bottomAnchor.constraint(equalTo: content.bottomAnchor),
     ])
 
+    let head = UIStackView()
+    head.axis = .horizontal
+    head.alignment = .center
+    head.spacing = 6
+    let title = UILabel()
+    title.text = "Clipboard"
+    title.font = .systemFont(ofSize: 16, weight: .bold)
+    title.textColor = Palette.textPrimary
+    title.setContentHuggingPriority(.defaultLow, for: .horizontal)
+    let back = smallButton("Keyboard", tag: 0, action: #selector(keysTapped))
+    back.widthAnchor.constraint(equalToConstant: 88).isActive = true
+    head.addArrangedSubview(title)
+    head.addArrangedSubview(back)
+    outer.addArrangedSubview(head)
+
     // Actions on the field being typed in.
     let actions = UIStackView()
     actions.axis = .horizontal
@@ -594,8 +625,25 @@ final class KeyboardViewController: UIInputViewController {
     actions.addArrangedSubview(smallButton(clearTitle, tag: 0, action: #selector(clearTapped)))
     outer.addArrangedSubview(actions)
 
+    guard hasFullAccess else {
+      let label = UILabel()
+      label.text =
+        "Turn on Allow Full Access in Settings > General > Keyboard > Keyboards > Everytool to use Clipboard"
+      label.font = .systemFont(ofSize: 14)
+      label.textColor = Palette.textPrimary
+      label.numberOfLines = 0
+      label.textAlignment = .center
+      label.accessibilityIdentifier = "kb.clipboard.fullaccess"
+      outer.addArrangedSubview(label)
+      return
+    }
+
     let scroll = UIScrollView()
     scroll.alwaysBounceVertical = true
+    // A scroll view's intrinsic height is zero; without this the stack
+    // gives the whole pane to the button rows and the clips never appear.
+    scroll.setContentHuggingPriority(.defaultLow, for: .vertical)
+    scroll.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
     outer.addArrangedSubview(scroll)
     let stack = UIStackView()
     stack.axis = .vertical
@@ -609,18 +657,6 @@ final class KeyboardViewController: UIInputViewController {
       stack.bottomAnchor.constraint(equalTo: scroll.bottomAnchor),
       stack.widthAnchor.constraint(equalTo: scroll.widthAnchor),
     ])
-
-    guard hasFullAccess else {
-      let label = UILabel()
-      label.text =
-        "Turn on Allow Full Access (Settings → General → Keyboard → Keyboards → Everytool) to paste, copy, cut and keep clips here. Typing works either way."
-      label.font = .systemFont(ofSize: 14)
-      label.textColor = .secondaryLabel
-      label.numberOfLines = 0
-      label.textAlignment = .center
-      stack.addArrangedSubview(label)
-      return
-    }
 
     let clips = SharedVault.clips()
 
@@ -636,7 +672,7 @@ final class KeyboardViewController: UIInputViewController {
       let label = UILabel()
       label.text = "No saved clips yet. Select text and tap Copy or Cut, tap Save to keep what's on the clipboard, or New to type one."
       label.font = .systemFont(ofSize: 14)
-      label.textColor = .secondaryLabel
+      label.textColor = Palette.textSecondary
       label.numberOfLines = 0
       label.textAlignment = .center
       stack.addArrangedSubview(label)
@@ -656,7 +692,7 @@ final class KeyboardViewController: UIInputViewController {
     let l = UILabel()
     l.text = text
     l.font = .systemFont(ofSize: 12, weight: .semibold)
-    l.textColor = .secondaryLabel
+    l.textColor = Palette.textSecondary
     return l
   }
 
@@ -684,12 +720,12 @@ final class KeyboardViewController: UIInputViewController {
 
     let main = UIButton(type: .system)
     main.setTitle((pinned ? "★ " : "") + (shortcut.map { "[\($0)] " } ?? "") + text, for: .normal)
-    main.setTitleColor(.label, for: .normal)
+    main.setTitleColor(Palette.textPrimary, for: .normal)
     main.titleLabel?.font = .systemFont(ofSize: 15)
     main.titleLabel?.numberOfLines = 2
     main.titleLabel?.lineBreakMode = .byTruncatingTail
     main.contentHorizontalAlignment = .left
-    main.backgroundColor = keyBackground
+    main.backgroundColor = Palette.keyBackground
     main.layer.cornerRadius = 8
     main.contentEdgeInsets = UIEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
     main.tag = tag
@@ -703,7 +739,8 @@ final class KeyboardViewController: UIInputViewController {
       let b = UIButton(type: .system)
       b.setTitle(title, for: .normal)
       b.titleLabel?.font = .systemFont(ofSize: 15)
-      b.backgroundColor = specialBackground
+      b.backgroundColor = Palette.keySpecial
+      b.setTitleColor(Palette.textPrimary, for: .normal)
       b.layer.cornerRadius = 8
       b.tag = tag
       b.accessibilityLabel = label
@@ -885,7 +922,7 @@ final class KeyboardViewController: UIInputViewController {
       : "\(words) words · \(source.count) characters"
         + (draft.isEmpty ? " (from clipboard)" : "")
     counts.font = .systemFont(ofSize: 14, weight: .semibold)
-    counts.textColor = .label
+    counts.textColor = Palette.textPrimary
     counts.numberOfLines = 0
     stack.addArrangedSubview(counts)
 
@@ -956,7 +993,7 @@ final class KeyboardViewController: UIInputViewController {
       let label = UILabel()
       label.text = "Nothing found in this text."
       label.font = .systemFont(ofSize: 13)
-      label.textColor = .secondaryLabel
+      label.textColor = Palette.textSecondary
       stack.addArrangedSubview(label)
       return
     }
@@ -964,7 +1001,7 @@ final class KeyboardViewController: UIInputViewController {
       let tag = registerRow(id: nil, text: item)
       let b = UIButton(type: .system)
       b.setTitle(item, for: .normal)
-      b.setTitleColor(.systemBlue, for: .normal)
+      b.setTitleColor(Palette.primary, for: .normal)
       b.titleLabel?.font = .systemFont(ofSize: 14)
       b.titleLabel?.numberOfLines = 1
       b.titleLabel?.lineBreakMode = .byTruncatingTail

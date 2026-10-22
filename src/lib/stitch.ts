@@ -1,15 +1,20 @@
 import { File, FileMode, Paths } from 'expo-file-system';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
-import { decodePngRows, PngStreamWriter, readPngSize } from './deflate';
+import { decodePngRows, decodePngRowsAsync, PngStreamWriter, readPngSize } from './deflate';
 import {
   analyzeFrames,
+  EDGE_COLS,
+  edgeXsForCrop,
   emitSegments,
   FEATURE_COLS,
   FeatureBuilder,
   PixelateSink,
   pixelBlock,
+  type ColumnRepair,
   type FrameFeatures,
+  type OverlayStamp,
+  type OverlapGap,
   type Redaction,
   type Segment,
 } from './stitchCore';
@@ -37,6 +42,8 @@ export interface StitchResult {
   bytes: number;
   /** Seams with no credible overlap — stacked whole, in order. */
   stackedSeams: number;
+  /** 1-based pairs that were stacked because the overlap was not trusted. */
+  gaps: OverlapGap[];
   /** Kept for API compatibility: true when any seam was stacked. */
   stacked: boolean;
   duplicates: number;
@@ -46,6 +53,10 @@ export interface StitchResult {
   segments: Segment[];
   /** Areas hidden (pixelated) in the written image. */
   redactions: Redaction[];
+  /** Column fills that keep a floating overlay from eating scrolled content. */
+  repairs: ColumnRepair[];
+  /** The single copy of each screen-fixed floating overlay. */
+  stamps: OverlayStamp[];
 }
 
 export type StitchPhase = 'preparing' | 'reading' | 'matching' | 'writing';
@@ -71,8 +82,10 @@ async function isPngAtWidth(uri: string, width: number): Promise<{ width: number
 
 /**
  * Bring every input to one width as PNG. Frames from Everytool's own
- * screen recording already are (≤1170 px PNG), and are used in place;
+ * screen recording already are (≤1320 px PNG), and are used in place;
  * picked photos (HEIC/JPEG, any size) are re-encoded by the platform.
+ * A resize, when one is required, uses an integer height so the cut
+ * stays on whole rows.
  */
 async function normalize(
   inputs: ShotInput[],
@@ -95,7 +108,8 @@ async function normalize(
     if (asIs) {
       out.push({ uri: s.uri, width: asIs.width, height: asIs.height });
     } else {
-      const r = await manipulateAsync(s.uri, [{ resize: { width } }], {
+      const height = Math.max(1, Math.round((s.height * width) / s.width));
+      const r = await manipulateAsync(s.uri, [{ resize: { width, height } }], {
         format: SaveFormat.PNG,
       });
       out.push({ uri: r.uri, width: r.width, height: r.height });
@@ -113,21 +127,40 @@ async function normalize(
 async function frameFeatures(frame: StitchFrame): Promise<FrameFeatures> {
   const originX = Math.floor(frame.width * 0.03);
   const cropWidth = Math.max(FEATURE_COLS, Math.floor(frame.width * 0.89));
-  const narrow = await manipulateAsync(
-    frame.uri,
-    [
-      { crop: { originX, originY: 0, width: cropWidth, height: frame.height } },
-      { resize: { width: FEATURE_COLS, height: frame.height } },
-    ],
-    { format: SaveFormat.PNG },
-  );
-  const bytes = await new File(narrow.uri).bytes();
+  // The right 8% is left out of scroll matching (the scroll indicator
+  // lives there) but a floating button sits in that same corner. A second
+  // strip keeps enough columns to see it. Both stay on-device.
+  const edgeOrigin = Math.floor(frame.width * 0.72);
+  const edgeWidth = Math.max(EDGE_COLS, frame.width - edgeOrigin);
+  const [narrow, edge] = await Promise.all([
+    manipulateAsync(
+      frame.uri,
+      [
+        { crop: { originX, originY: 0, width: cropWidth, height: frame.height } },
+        { resize: { width: FEATURE_COLS, height: frame.height } },
+      ],
+      { format: SaveFormat.PNG },
+    ),
+    manipulateAsync(
+      frame.uri,
+      [
+        { crop: { originX: edgeOrigin, originY: 0, width: edgeWidth, height: frame.height } },
+        { resize: { width: EDGE_COLS, height: frame.height } },
+      ],
+      { format: SaveFormat.PNG },
+    ),
+  ]);
   const builder = new FeatureBuilder(frame.width, frame.height, true);
+  builder.setEdgeXs(edgeXsForCrop(frame.width, edgeOrigin, edgeWidth));
+  const [bytes, edgeBytes] = await Promise.all([new File(narrow.uri).bytes(), new File(edge.uri).bytes()]);
   decodePngRows(bytes, (y, rgba) => builder.addRow(y, rgba));
-  try {
-    new File(narrow.uri).delete();
-  } catch {
-    // cache cleanup is best effort
+  decodePngRows(edgeBytes, (y, rgba) => builder.addEdgeRow(y, rgba));
+  for (const uri of [narrow.uri, edge.uri]) {
+    try {
+      new File(uri).delete();
+    } catch {
+      // cache cleanup is best effort
+    }
   }
   return builder.result();
 }
@@ -197,12 +230,12 @@ export async function stitchFrames(
   outFile.create();
   const sink = fileSink(outFile);
   try {
-    const writer = new PngStreamWriter(sink, analysis.width, analysis.height);
+    const writer = new PngStreamWriter(sink, analysis.width, analysis.height, { level: 1 });
     await emitSegments(
       analysis,
       async (frame, onRow, stopAfterRow) => {
         const bytes = await new File(frames[frame]!.uri).bytes();
-        decodePngRows(bytes, onRow, stopAfterRow);
+        await decodePngRowsAsync(bytes, onRow, stopAfterRow);
       },
       (rgba) => writer.writeRow(rgba),
       (done, total) => opts.onProgress?.('writing', done, total),
@@ -225,12 +258,15 @@ export async function stitchFrames(
     height: analysis.height,
     bytes: sink.bytes,
     stackedSeams: analysis.stackedSeams,
+    gaps: analysis.gaps,
     stacked: analysis.stackedSeams > 0,
     duplicates: analysis.duplicates,
     trimmed: analysis.trimmed,
     frames,
     segments: analysis.segments,
     redactions: [],
+    repairs: analysis.repairs,
+    stamps: analysis.stamps,
   };
 }
 
@@ -250,7 +286,7 @@ export async function renderStitch(
   outFile.create();
   const sink = fileSink(outFile);
   try {
-    const writer = new PngStreamWriter(sink, result.width, result.height);
+    const writer = new PngStreamWriter(sink, result.width, result.height, { level: 1 });
     const pix = new PixelateSink(result.width, redactions, pixelBlock(result.width), (row) =>
       writer.writeRow(row),
     );
@@ -258,7 +294,7 @@ export async function renderStitch(
       result,
       async (frame, onRow, stopAfterRow) => {
         const bytes = await new File(result.frames[frame]!.uri).bytes();
-        decodePngRows(bytes, onRow, stopAfterRow);
+        await decodePngRowsAsync(bytes, onRow, stopAfterRow);
       },
       (rgba) => pix.writeRow(rgba),
       (done, total) => onProgress?.('writing', done, total),

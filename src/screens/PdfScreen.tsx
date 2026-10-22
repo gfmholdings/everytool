@@ -6,17 +6,22 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Card, Field, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
+import { useUndoHistory } from '../hooks/useUndoHistory';
 import { formatBytes, shareFile } from '../lib/files';
 import {
   compressPdf,
   extractPdfPages,
   mergePdfSources,
   pdfSourceFromUri,
+  scannedPagesToPdf,
   type PdfResult,
   type PdfSource,
 } from '../lib/pdf';
+import { scanDocumentPages } from '../store/sharedVault';
 import { specToIndices } from '../lib/pages';
-import { colors, type } from '../theme';
+import type { Palette } from '../theme';
+import { useThemed } from '../useTheme';
+import { PdfMore } from './PdfMore';
 
 type Mode = 'merge' | 'split' | 'compress';
 
@@ -27,14 +32,18 @@ type Mode = 'merge' | 'split' | 'compress';
 export function PdfScreen({
   onBack,
   initialPdf,
+  convertFiles,
   notify,
 }: {
   onBack: () => void;
   initialPdf?: { uri: string; name: string };
-  notify: (msg: string) => void;
+  convertFiles?: { uri: string; name: string }[];
+  notify: (msg: string, action?: { label: string; onPress: () => void }) => void;
 }) {
+  const { type, styles } = useThemed(makeStyles);
   const [mode, setMode] = useState<Mode>('merge');
-  const [sources, setSources] = useState<PdfSource[]>([]);
+  const sourcesHist = useUndoHistory<PdfSource[]>([]);
+  const sources = sourcesHist.present;
   const [spec, setSpec] = useState('');
   const [result, setResult] = useState<PdfResult | null>(null);
   const [beforeBytes, setBeforeBytes] = useState(0);
@@ -46,7 +55,7 @@ export function PdfScreen({
   if (initialPdf && !seeded) {
     setSeeded(true);
     void pdfSourceFromUri(initialPdf.uri, initialPdf.name, 'pdf').then((s) =>
-      setSources([s]),
+      sourcesHist.reset([s]),
     );
   }
 
@@ -61,8 +70,33 @@ export function PdfScreen({
     for (const asset of res.assets) {
       added.push(await pdfSourceFromUri(asset.uri, asset.name, 'pdf'));
     }
-    setSources((s) => [...s, ...added]);
+    sourcesHist.commit((s) => [...s, ...added]);
     setResult(null);
+  };
+
+  const scanToPdf = async () => {
+    if (busy) return;
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (!perm.granted) {
+      setError('Camera access is off in Settings.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const pages = await scanDocumentPages();
+      if (pages == null) {
+        setError('This build can’t open the document scanner. Update Everytool and try again.');
+        return;
+      }
+      if (pages.length === 0) return;
+      setResult(await scannedPagesToPdf(pages));
+      notify('Scanned on this phone.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Couldn’t scan that.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const addPhotos = async () => {
@@ -85,12 +119,12 @@ export function PdfScreen({
         await pdfSourceFromUri(jpg.uri, a.fileName ?? `photo-${i + 1}`, 'image'),
       );
     }
-    setSources((s) => [...s, ...added]);
+    sourcesHist.commit((s) => [...s, ...added]);
     setResult(null);
   };
 
   const move = (index: number, dir: -1 | 1) => {
-    setSources((s) => {
+    sourcesHist.commit((s) => {
       const next = [...s];
       const j = index + dir;
       if (j < 0 || j >= next.length) return s;
@@ -132,7 +166,16 @@ export function PdfScreen({
   const totalPages = sources.reduce((n, s) => n + s.pages, 0);
 
   return (
-    <ToolShell title="PDF tools" onBack={onBack}>
+    <ToolShell
+      title="PDF tools"
+      onBack={onBack}
+      undo={{
+        canUndo: sourcesHist.canUndo,
+        canRedo: sourcesHist.canRedo,
+        onUndo: () => sourcesHist.undo(),
+        onRedo: () => sourcesHist.redo(),
+      }}
+    >
       <Segmented
         options={[
           { id: 'merge', label: 'Merge' },
@@ -167,7 +210,10 @@ export function PdfScreen({
             </View>
           )}
           <Pressable
-            onPress={() => setSources((all) => all.filter((x) => x.id !== s.id))}
+            onPress={() => {
+              sourcesHist.commit((all) => all.filter((x) => x.id !== s.id));
+              notify('Removed', { label: 'Undo', onPress: () => sourcesHist.undo() });
+            }}
             style={styles.arrowBtn}
           >
             <Text style={styles.remove}>✕</Text>
@@ -183,6 +229,7 @@ export function PdfScreen({
           <PrimaryButton label="Add photos" onPress={addPhotos} />
         </View>
       </View>
+      <GhostButton label={busy ? 'Working…' : 'Scan to PDF'} onPress={() => void scanToPdf()} />
 
       {mode === 'split' && sources[0] && (
         <>
@@ -224,7 +271,6 @@ export function PdfScreen({
         }
         onPress={run}
         disabled={busy || sources.length === 0}
-        orange
       />
       {!!error && <Text style={styles.error}>{error}</Text>}
 
@@ -255,7 +301,7 @@ export function PdfScreen({
             onPress={() =>
               void pdfSourceFromUri(result.uri, 'result.pdf', 'pdf').then(
                 (s) => {
-                  setSources([s]);
+                  sourcesHist.reset([s]);
                   setResult(null);
                   notify('Result loaded');
                 },
@@ -264,19 +310,33 @@ export function PdfScreen({
           />
         </Card>
       )}
+      <PdfMore
+        key={(() => {
+          const first = sources.find((item) => item.kind === 'pdf');
+          return first ? `${first.uri}:${first.pages}` : 'no-pdf';
+        })()}
+        pdf={(() => {
+          const first = sources.find((item) => item.kind === 'pdf');
+          return first ? { uri: first.uri, name: first.name, pages: first.pages } : null;
+        })()}
+        convertFiles={convertFiles}
+        notify={notify}
+      />
     </ToolShell>
   );
 }
 
-const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  rowMain: { flex: 1, gap: 2 },
-  rowActions: { flexDirection: 'row' },
-  arrowBtn: { padding: 8 },
-  arrow: { fontSize: 18, color: colors.accent, fontWeight: '700' },
-  remove: { fontSize: 15, color: colors.faint },
-  addRow: { flexDirection: 'row', gap: 10 },
-  addHalf: { flex: 1 },
-  resultCard: { gap: 10 },
-  error: { color: colors.danger, fontSize: 15 },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    row: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    rowMain: { flex: 1, gap: 2 },
+    rowActions: { flexDirection: 'row' },
+    arrowBtn: { padding: 8 },
+    arrow: { fontSize: 18, color: p.primary, fontWeight: '700' },
+    remove: { fontSize: 15, color: p.textSecondary },
+    addRow: { flexDirection: 'row', gap: 10 },
+    addHalf: { flex: 1 },
+    resultCard: { gap: 10 },
+    error: { color: p.destructive, fontSize: 15 },
+  });
+}

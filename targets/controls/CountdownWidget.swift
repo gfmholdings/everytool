@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import WidgetKit
 
 /// Days counter widgets (home screen + lock screen). Reads the
@@ -11,8 +12,10 @@ struct CountdownEntry: TimelineEntry {
   let date: Date
   let title: String?
   let target: Date?
+  /// Same rule as dates.ts countedDays: today counts as day 1.
+  let includeToday: Bool
 
-  var daysLeft: Int? {
+  private var rawDays: Int? {
     guard let target else { return nil }
     let cal = Calendar.current
     return cal.dateComponents(
@@ -21,11 +24,22 @@ struct CountdownEntry: TimelineEntry {
       to: cal.startOfDay(for: target)
     ).day
   }
+
+  var daysLeft: Int? {
+    guard let n = rawDays else { return nil }
+    guard includeToday else { return n }
+    if n > 0 { return n + 1 }
+    if n < 0 { return n - 1 }
+    return 1
+  }
+
+  /// The target falls on this entry's calendar day, before the +1 adjustment.
+  var landsToday: Bool { rawDays == 0 }
 }
 
 struct CountdownProvider: TimelineProvider {
   func placeholder(in context: Context) -> CountdownEntry {
-    CountdownEntry(date: Date(), title: "Trip", target: Date().addingTimeInterval(12 * 86_400))
+    CountdownEntry(date: Date(), title: "Trip", target: Date().addingTimeInterval(12 * 86_400), includeToday: false)
   }
 
   func getSnapshot(in context: Context, completion: @escaping (CountdownEntry) -> Void) {
@@ -47,17 +61,18 @@ struct CountdownProvider: TimelineProvider {
   private func entry(on day: Date) -> CountdownEntry {
     let start = Calendar.current.startOfDay(for: day)
     let items = (SharedVault.state()["countdowns"] as? [[String: Any]]) ?? []
-    let upcoming = items.compactMap { item -> (String, Date)? in
+    let upcoming = items.compactMap { item -> (String, Date, Bool)? in
       guard let ms = item["date"] as? Double else { return nil }
       let title = (item["title"] as? String) ?? "Countdown"
-      return (title, Date(timeIntervalSince1970: ms / 1000))
+      let includeToday = (item["includeToday"] as? Bool) ?? false
+      return (title, Date(timeIntervalSince1970: ms / 1000), includeToday)
     }
     .filter { $0.1 >= start }
     .sorted { $0.1 < $1.1 }
     guard let next = upcoming.first else {
-      return CountdownEntry(date: day, title: nil, target: nil)
+      return CountdownEntry(date: day, title: nil, target: nil, includeToday: false)
     }
-    return CountdownEntry(date: day, title: next.0, target: next.1)
+    return CountdownEntry(date: day, title: next.0, target: next.1, includeToday: next.2)
   }
 }
 
@@ -67,8 +82,8 @@ struct CountdownWidgetView: View {
 
   private var label: String {
     guard let n = entry.daysLeft else { return "" }
-    if n == 0 { return "Today" }
-    if n == 1 { return "Tomorrow" }
+    if entry.landsToday { return "Today" }
+    if !entry.includeToday && n == 1 { return "Tomorrow" }
     return "\(n) days"
   }
 
@@ -102,10 +117,10 @@ struct CountdownWidgetView: View {
             Text(entry.daysLeft.map { String($0) } ?? "–")
               .font(.system(size: 44, weight: .heavy, design: .rounded))
               .minimumScaleFactor(0.5)
-              .foregroundStyle(.orange)
-            Text(entry.daysLeft == 0 ? "today" : (entry.daysLeft == 1 ? "day to go" : "days to go"))
+              .foregroundStyle(Color(uiColor: Palette.primary))
+            Text(entry.landsToday ? "today" : (entry.daysLeft == 1 ? "day to go" : "days to go"))
               .font(.caption)
-              .foregroundStyle(.secondary)
+              .foregroundStyle(Color(uiColor: Palette.textSecondary))
           }
           .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -126,7 +141,7 @@ struct CountdownWidgetView: View {
         Image(systemName: "calendar.badge.plus")
         Text("Add a countdown in Everytool → Days counter")
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(Color(uiColor: Palette.textSecondary))
       }
     }
   }

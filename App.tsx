@@ -15,10 +15,13 @@ import {
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { File } from 'expo-file-system';
 
 import { ToolGlyph } from './src/components/ui';
 import { drainShareInbox, readBroadcastInbox } from './src/lib/incoming';
+import { pdfTargetFromShare, routeIncomingUrl } from './src/lib/pdfOpen';
+import { SPLIT_LEDGER_STORAGE_KEY } from './src/lib/splitwise';
 import type { ShotInput } from './src/lib/stitch';
 import { ClipboardScreen } from './src/screens/ClipboardScreen';
 import { ConvertScreen } from './src/screens/ConvertScreen';
@@ -27,18 +30,24 @@ import { GifScreen } from './src/screens/GifScreen';
 import { PdfScreen } from './src/screens/PdfScreen';
 import { QrScreen } from './src/screens/QrScreen';
 import { ResizeScreen } from './src/screens/ResizeScreen';
+import { SplitImportScreen } from './src/screens/SplitImportScreen';
 import { SplitScreen } from './src/screens/SplitScreen';
 import { StitchScreen } from './src/screens/StitchScreen';
 import { TextScreen } from './src/screens/TextScreen';
 import { AppStoreProvider, useStore } from './src/store/AppStore';
-import { takePendingTool } from './src/store/sharedVault';
-import { colors, space, type } from './src/theme';
+import { takeOpenedPdf, takePendingTool } from './src/store/sharedVault';
+import { space, type Palette } from './src/theme';
 import { TOOLS, type ToolId } from './src/types';
+import { useThemed } from './src/useTheme';
 
 interface Pending {
   tool: ToolId;
   image?: { uri: string; width: number; height: number };
   pdf?: { uri: string; name: string };
+  /** Files for Any file → PDF. The PDF screen does not read this yet. */
+  convertFiles?: { uri: string; name: string }[];
+  /** An .etsplit file opened from AirDrop, Messages, WhatsApp, or Files. */
+  splitImport?: { name: string; text: string; stored: string | null };
   stitchShots?: ShotInput[];
   text?: string;
   autoRecord?: boolean;
@@ -70,6 +79,7 @@ function requestFor(target: { record: boolean; session: boolean }) {
 }
 
 function Root() {
+  const { type, styles } = useThemed(makeStyles);
   const insets = useSafeAreaInsets();
   const { ready, addClip } = useStore();
   const [tool, setTool] = useState<ToolId | null>(null);
@@ -78,13 +88,15 @@ function Root() {
     toolRef.current = tool;
   }, [tool]);
   const [pending, setPending] = useState<Pending | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ text: string; undo?: () => void } | null>(null);
   const [toastAnim] = useState(() => new Animated.Value(0));
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastGen = useRef(0);
 
   const notify = useCallback(
-    (msg: string) => {
-      setToast(msg);
+    (msg: string, action?: { label: string; onPress: () => void }) => {
+      const gen = (toastGen.current += 1);
+      setToast({ text: msg, undo: action?.onPress });
       Animated.timing(toastAnim, {
         toValue: 1,
         duration: 160,
@@ -96,8 +108,11 @@ function Root() {
           toValue: 0,
           duration: 250,
           useNativeDriver: true,
-        }).start(() => setToast(null));
-      }, 2200);
+        }).start(() => {
+          // A newer toast may already be showing. Don't clear it.
+          if (toastGen.current === gen) setToast(null);
+        });
+      }, action ? 4000 : 2200);
     },
     [toastAnim],
   );
@@ -134,9 +149,28 @@ function Root() {
         openTool('clipboard');
         return true;
       }
+      if (item.kind === 'convert' || items.some((entry) => entry.item.kind === 'convert')) {
+        openTool('pdf', {
+          convertFiles: items
+            .filter((entry) => entry.item.kind === 'convert')
+            .map((entry) => ({ uri: entry.uri, name: entry.item.name ?? entry.item.file })),
+        });
+        return true;
+      }
       if (item.kind === 'pdf') {
-        openTool('pdf', { pdf: { uri, name: item.file } });
-      } else if (item.tool === 'stitch') {
+        const target = pdfTargetFromShare([item]);
+        openTool('pdf', { pdf: { uri, name: target?.name ?? item.name ?? item.file } });
+        return true;
+      }
+      const pdfShare = pdfTargetFromShare(items.map((entry) => entry.item));
+      if (pdfShare) {
+        const match = items.find((entry) => entry.item.file === pdfShare.file);
+        if (match) {
+          openTool('pdf', { pdf: { uri: match.uri, name: pdfShare.name } });
+          return true;
+        }
+      }
+      if (item.tool === 'stitch') {
         openTool('stitch', {
           stitchShots: items
             .filter((x) => x.item.kind === 'image')
@@ -171,17 +205,53 @@ function Root() {
     if (!ready) return;
     const handle = (url: string | null) => {
       if (!url) return;
-      const parsed = Linking.parse(url);
-      const path = (parsed.path ?? '').replace(/^\//, '');
-      let ref: string | null = null;
-      if (parsed.hostname === 'tool') ref = path;
-      else if (path.startsWith('tool/')) ref = path.slice('tool/'.length);
-      else if (parsed.hostname === 'stitch' || path === 'stitch') ref = 'stitch';
-      else if (parsed.hostname === 'record' || path === 'record') ref = 'record';
-      else if (parsed.hostname === 'session' || path === 'session') ref = 'session';
+      const route = routeIncomingUrl(url);
+      // A split group from AirDrop, Messages, WhatsApp, or Files. The native
+      // handler has already copied it. The import screen shows the merge
+      // counts before anything is written.
+      if (route.kind === 'split') {
+        void (async () => {
+          const opened = takeOpenedPdf(url);
+          const uri = opened?.uri ?? url;
+          let body = '';
+          try {
+            body = await new File(uri).text();
+          } catch {
+            body = '';
+          }
+          let saved: string | null = null;
+          try {
+            saved = await AsyncStorage.getItem(SPLIT_LEDGER_STORAGE_KEY);
+          } catch {
+            saved = null;
+          }
+          openTool('split', {
+            splitImport: { name: opened?.name ?? route.name, text: body, stored: saved },
+          });
+        })();
+        return;
+      }
+      // A PDF from Files or Open In. The native handler has already copied
+      // it into the sandbox; the existing PDF tool loads that copy.
+      if (route.kind === 'pdf') {
+        const opened = takeOpenedPdf(url);
+        openTool('pdf', {
+          pdf: { uri: opened?.uri ?? url, name: opened?.name ?? route.name },
+        });
+        return;
+      }
+      // A text, HTML, CSV, Markdown, RTF, or web archive from Files.
+      // The copy is kept. The PDF screen converts the formats it can read offline.
+      if (route.kind === 'convert') {
+        const opened = takeOpenedPdf(url);
+        openTool('pdf', {
+          convertFiles: [{ uri: opened?.uri ?? url, name: opened?.name ?? route.name }],
+        });
+        return;
+      }
       void drainAndRoute().then((routed) => {
         if (routed) return;
-        const target = parseToolRef(ref);
+        const target = route.kind === 'tool' ? parseToolRef(route.ref) : null;
         if (target) openTool(target.id, requestFor(target));
       });
     };
@@ -271,7 +341,14 @@ function Root() {
       );
       break;
     case 'pdf':
-      screen = <PdfScreen onBack={back} initialPdf={pending?.pdf} notify={notify} />;
+      screen = (
+        <PdfScreen
+          onBack={back}
+          initialPdf={pending?.pdf}
+          convertFiles={pending?.convertFiles}
+          notify={notify}
+        />
+      );
       break;
     case 'text':
       screen = <TextScreen onBack={back} notify={notify} />;
@@ -280,7 +357,16 @@ function Root() {
       screen = <DaysScreen onBack={back} notify={notify} />;
       break;
     case 'split':
-      screen = <SplitScreen onBack={back} />;
+      screen = pending?.splitImport ? (
+        <SplitImportScreen
+          name={pending.splitImport.name}
+          text={pending.splitImport.text}
+          stored={pending.splitImport.stored}
+          onBack={back}
+        />
+      ) : (
+        <SplitScreen onBack={back} notify={notify} />
+      );
       break;
     case 'gif':
       screen = <GifScreen onBack={back} notify={notify} />;
@@ -340,7 +426,20 @@ function Root() {
       )}
       {toast && (
         <Animated.View style={[styles.toast, { opacity: toastAnim }]}>
-          <Text style={styles.toastText}>{toast}</Text>
+          <Text style={styles.toastText}>{toast.text}</Text>
+          {toast.undo && (
+            <Pressable
+              accessibilityLabel="Undo"
+              onPress={() => {
+                const run = toast.undo;
+                setToast(null);
+                run?.();
+              }}
+              hitSlop={8}
+            >
+              <Text style={styles.toastUndo}>Undo</Text>
+            </Pressable>
+          )}
         </Animated.View>
       )}
     </View>
@@ -358,61 +457,68 @@ export default function App() {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
-  loading: {
-    flex: 1,
-    backgroundColor: colors.bg,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  loadingText: {
-    fontSize: 15,
-    fontWeight: '800',
-    letterSpacing: 1.2,
-    color: colors.accent,
-    textTransform: 'uppercase',
-  },
-  home: { padding: space.screen, gap: space.gap, paddingTop: 24 },
-  intro: { marginTop: -4 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.gap },
-  tile: {
-    width: '48%',
-    flexGrow: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: colors.card,
-    borderRadius: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    minHeight: 72,
-  },
-  tileGlyph: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tileName: { fontSize: 16, fontWeight: '600', color: colors.ink, flexShrink: 1 },
-  surfacesCard: {
-    backgroundColor: colors.card,
-    borderRadius: space.radius,
-    padding: space.cardPad,
-    marginTop: 4,
-  },
-  spaced: { marginTop: 8 },
-  toast: {
-    position: 'absolute',
-    left: 24,
-    right: 24,
-    bottom: 36,
-    backgroundColor: colors.ink,
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  toastText: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    root: { flex: 1, backgroundColor: p.background },
+    loading: {
+      flex: 1,
+      backgroundColor: p.background,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    loadingText: {
+      fontSize: 15,
+      fontWeight: '800',
+      letterSpacing: 1.2,
+      color: p.primary,
+      textTransform: 'uppercase',
+    },
+    home: { padding: space.screen, gap: space.gap, paddingTop: 24 },
+    intro: { marginTop: -4 },
+    grid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.gap },
+    tile: {
+      width: '48%',
+      flexGrow: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      backgroundColor: p.surface,
+      borderRadius: 24,
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+      minHeight: 72,
+    },
+    tileGlyph: {
+      width: 44,
+      height: 44,
+      borderRadius: 14,
+      backgroundColor: p.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    tileName: { fontSize: 16, fontWeight: '600', color: p.textPrimary, flexShrink: 1 },
+    surfacesCard: {
+      backgroundColor: p.surface,
+      borderRadius: space.radius,
+      padding: space.cardPad,
+      marginTop: 4,
+    },
+    spaced: { marginTop: 8 },
+    toast: {
+      position: 'absolute',
+      left: 24,
+      right: 24,
+      bottom: 36,
+      backgroundColor: p.toast,
+      borderRadius: 12,
+      paddingVertical: 12,
+      paddingHorizontal: 16,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12,
+    },
+    toastText: { color: p.onToast, fontSize: 15, fontWeight: '600', flex: 1 },
+    toastUndo: { color: p.onToast, fontSize: 15, fontWeight: '800' },
+  });
+}

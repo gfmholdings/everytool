@@ -51,6 +51,34 @@ export function breakdownYMD(from: Date, to: Date): YmdBreakdown {
   return { years, months, days: daysBetween(cursor2, end) };
 }
 
+/**
+ * Day span used by Between and Until.
+ * With includeEnds off, this is the midnight difference (today → a date
+ * 100 days out is 100). With it on, both ends count, so that span is 101
+ * and a single day is 1. The sign stays with the direction of the range.
+ */
+export function countedDays(from: Date, to: Date, includeEnds = false): number {
+  const diff = daysBetween(from, to);
+  if (!includeEnds) return diff;
+  if (diff > 0) return diff + 1;
+  if (diff < 0) return diff - 1;
+  return 1;
+}
+
+/**
+ * Year/month/day breakdown for the same span as countedDays.
+ * Including the ends is the exclusive breakdown to the day after the
+ * later date, so "3 months 8 days" becomes "3 months 9 days".
+ */
+export function countedBreakdown(from: Date, to: Date, includeEnds = false): YmdBreakdown {
+  if (!includeEnds) return breakdownYMD(from, to);
+  const forward = daysBetween(from, to) >= 0;
+  const start = forward ? from : to;
+  const end = forward ? to : from;
+  const next = new Date(end.getFullYear(), end.getMonth(), end.getDate() + 1);
+  return breakdownYMD(start, next);
+}
+
 /** Whole days from today (local) until `date`. Negative if it has passed. */
 export function daysUntil(date: Date, today: Date = new Date()): number {
   return daysBetween(today, date);

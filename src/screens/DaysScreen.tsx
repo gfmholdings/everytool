@@ -1,12 +1,15 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useMemo, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Switch, Text, useColorScheme, View } from 'react-native';
 
 import { Card, Field, PrimaryButton, Segmented, ToolShell } from '../components/ui';
+import { useUndoHistory } from '../hooks/useUndoHistory';
 import { daysLeft, describeDaysLeft, sortCountdowns } from '../lib/countdowns';
-import { breakdownYMD, daysBetween, formatBreakdown } from '../lib/dates';
+import { countedBreakdown, countedDays, daysBetween, formatBreakdown } from '../lib/dates';
 import { useStore } from '../store/AppStore';
-import { colors, type } from '../theme';
+import type { Countdown } from '../types';
+import type { Palette } from '../theme';
+import { useThemed } from '../useTheme';
 
 type Mode = 'between' | 'until' | 'age';
 
@@ -38,9 +41,11 @@ export function DaysScreen({
   notify,
 }: {
   onBack: () => void;
-  notify?: (msg: string) => void;
+  notify?: (msg: string, action?: { label: string; onPress: () => void }) => void;
 }) {
-  const { state, addCountdown, deleteCountdown } = useStore();
+  const { palette, type, styles } = useThemed(makeStyles);
+  const { state, addCountdown, deleteCountdown, restoreCountdown } = useStore();
+  const removed = useUndoHistory<Countdown | null>(null, { shake: true });
   const [title, setTitle] = useState('');
   const [mode, setMode] = useState<Mode>(state.countdowns.length > 0 ? 'until' : 'between');
   const today = useMemo(() => startOfDay(new Date()), []);
@@ -48,9 +53,17 @@ export function DaysScreen({
   const [to, setTo] = useState<Date>(() => plusDays(today, 30));
   const [target, setTarget] = useState<Date>(() => plusDays(today, 100));
   const [birth, setBirth] = useState<Date>(() => plusDays(today, -365 * 25));
+  const [includeBetween, setIncludeBetween] = useState(false);
+  const [includeUntil, setIncludeUntil] = useState(false);
   const [openPicker, setOpenPicker] = useState<
     'from' | 'to' | 'target' | 'birth' | null
   >(null);
+  // The screen chrome is light gray. An inline UIDatePicker with an
+  // unspecified style follows a dark trait and paints the month title,
+  // weekday headers, and day numbers white. Pin the picker to the real
+  // scheme and sit it on a card of that same scheme.
+  const scheme = useColorScheme();
+  const pickerVariant = scheme === 'dark' ? 'dark' : 'light';
 
   const dateField = (
     label: string,
@@ -66,25 +79,63 @@ export function DaysScreen({
         </Card>
       </Pressable>
       {openPicker === key && (
-        <DateTimePicker
-          value={value}
-          mode="date"
-          display={Platform.OS === 'ios' ? 'inline' : 'default'}
-          onChange={(_e, d) => {
-            if (d) set(startOfDay(d));
-            if (Platform.OS !== 'ios') setOpenPicker(null);
-          }}
-        />
+        <View style={styles.pickerCard}>
+          <DateTimePicker
+            value={value}
+            mode="date"
+            display={Platform.OS === 'ios' ? 'inline' : 'default'}
+            themeVariant={pickerVariant}
+            accentColor={palette.primary}
+            style={styles.picker}
+            onChange={(_e, d) => {
+              if (d) set(startOfDay(d));
+              if (Platform.OS !== 'ios') setOpenPicker(null);
+            }}
+          />
+        </View>
       )}
     </View>
   );
 
-  const between = daysBetween(from, to);
-  const until = daysBetween(today, target);
+  const between = countedDays(from, to, includeBetween);
+  const untilRaw = daysBetween(today, target);
+  const until = countedDays(today, target, includeUntil);
   const age = daysBetween(birth, today);
 
+  const undoDelete = () => {
+    const item = removed.present;
+    if (!item) return;
+    removed.undo();
+    restoreCountdown(item);
+  };
+  const redoDelete = () => {
+    const item = removed.redo();
+    if (!item) return;
+    deleteCountdown(item.id);
+  };
+  const removeCountdown = (c: Countdown) => {
+    removed.commit(c);
+    deleteCountdown(c.id);
+    notify?.('Removed', {
+      label: 'Undo',
+      onPress: () => {
+        restoreCountdown(c);
+        removed.undo();
+      },
+    });
+  };
+
   return (
-    <ToolShell title="Days counter" onBack={onBack}>
+    <ToolShell
+      title="Days counter"
+      onBack={onBack}
+      undo={{
+        canUndo: removed.canUndo,
+        canRedo: removed.canRedo,
+        onUndo: undoDelete,
+        onRedo: redoDelete,
+      }}
+    >
       <Segmented
         options={[
           { id: 'between', label: 'Between' },
@@ -103,8 +154,9 @@ export function DaysScreen({
             <Text style={type.numBig}>{Math.abs(between)}</Text>
             <Text style={type.small}>days</Text>
             <Text style={[type.body, styles.breakdown]}>
-              {formatBreakdown(breakdownYMD(from, to))}
+              {formatBreakdown(countedBreakdown(from, to, includeBetween))}
             </Text>
+            <IncludeToday value={includeBetween} onChange={setIncludeBetween} />
           </Card>
         </>
       )}
@@ -115,11 +167,12 @@ export function DaysScreen({
           <Card style={styles.result}>
             <Text style={type.numBig}>{Math.abs(until)}</Text>
             <Text style={type.small}>
-              {until > 0 ? 'days to go' : until < 0 ? 'days ago' : 'today'}
+              {untilRaw === 0 ? 'today' : untilRaw > 0 ? 'days to go' : 'days ago'}
             </Text>
             <Text style={[type.body, styles.breakdown]}>
-              {formatBreakdown(breakdownYMD(today, target))}
+              {formatBreakdown(countedBreakdown(today, target, includeUntil))}
             </Text>
+            <IncludeToday value={includeUntil} onChange={setIncludeUntil} />
           </Card>
           <Field
             value={title}
@@ -130,7 +183,7 @@ export function DaysScreen({
           <PrimaryButton
             label="Save as countdown"
             onPress={() => {
-              addCountdown(title, target);
+              addCountdown(title, target, includeUntil);
               setTitle('');
               notify?.('Countdown saved — add the Countdown widget to see it at a glance');
             }}
@@ -140,6 +193,7 @@ export function DaysScreen({
             <>
               <Text style={type.label}>Your countdowns</Text>
               {sortCountdowns(state.countdowns, today).map((c) => {
+                const raw = daysBetween(today, new Date(c.date));
                 const n = daysLeft(c, today);
                 return (
                   <Card key={c.id} style={styles.cdRow}>
@@ -148,13 +202,13 @@ export function DaysScreen({
                         {c.title}
                       </Text>
                       <Text style={type.small}>
-                        {fmt(new Date(c.date))} · {describeDaysLeft(n)}
+                        {fmt(new Date(c.date))} · {describeDaysLeft(raw, c.includeToday === true)}
                       </Text>
                     </View>
-                    <Text style={[type.num, n < 0 && { color: colors.faint }]}>{Math.abs(n)}</Text>
+                    <Text style={[type.num, n < 0 && { color: palette.textSecondary }]}>{Math.abs(n)}</Text>
                     <Pressable
                       accessibilityLabel={`Delete ${c.title}`}
-                      onPress={() => deleteCountdown(c.id)}
+                      onPress={() => removeCountdown(c)}
                       hitSlop={8}
                     >
                       <Text style={styles.cdDelete}>✕</Text>
@@ -178,7 +232,7 @@ export function DaysScreen({
             <Text style={type.numBig}>{age}</Text>
             <Text style={type.small}>days old</Text>
             <Text style={[type.body, styles.breakdown]}>
-              {formatBreakdown(breakdownYMD(birth, today))}
+              {formatBreakdown(countedBreakdown(birth, today))}
             </Text>
           </Card>
         </>
@@ -187,11 +241,50 @@ export function DaysScreen({
   );
 }
 
-const styles = StyleSheet.create({
-  dateCard: { marginTop: 6, paddingVertical: 14 },
-  result: { alignItems: 'center', gap: 2, paddingVertical: 22 },
-  breakdown: { marginTop: 6 },
-  cdRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12 },
-  cdMain: { flex: 1, gap: 2 },
-  cdDelete: { fontSize: 16, color: colors.faint, paddingHorizontal: 4 },
-});
+function IncludeToday({
+  value,
+  onChange,
+}: {
+  value: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  const { palette, type, styles } = useThemed(makeStyles);
+  return (
+    <View style={styles.includeRow}>
+      <Text style={type.body}>Include today</Text>
+      <Switch
+        accessibilityLabel="Include today"
+        value={value}
+        onValueChange={onChange}
+        trackColor={{ false: palette.separator, true: palette.primary }}
+      />
+    </View>
+  );
+}
+
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    dateCard: { marginTop: 6, paddingVertical: 14 },
+    pickerCard: {
+      backgroundColor: p.surface,
+      borderRadius: 18,
+      overflow: 'hidden',
+    },
+    picker: { width: '100%' },
+    result: { alignItems: 'center', gap: 2, paddingVertical: 22 },
+    breakdown: { marginTop: 6 },
+    includeRow: {
+      alignSelf: 'stretch',
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginTop: 14,
+      paddingTop: 12,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: p.separator,
+    },
+    cdRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12 },
+    cdMain: { flex: 1, gap: 2 },
+    cdDelete: { fontSize: 16, color: p.textSecondary, paddingHorizontal: 4 },
+  });
+}

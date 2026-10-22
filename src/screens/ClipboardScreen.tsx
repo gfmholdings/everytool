@@ -4,7 +4,6 @@ import {
   Alert,
   AppState as RNAppState,
   Pressable,
-  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -12,9 +11,14 @@ import {
 } from 'react-native';
 
 import { Card, Field, GhostButton, PrimaryButton, ToolShell } from '../components/ui';
+import { useUndoHistory } from '../hooks/useUndoHistory';
+import { shareText } from '../lib/files';
 import { sortedClips, useStore } from '../store/AppStore';
-import { colors, type } from '../theme';
+import type { Palette } from '../theme';
+import { useThemed } from '../useTheme';
 import type { Clip } from '../types';
+
+type Notify = (msg: string, action?: { label: string; onPress: () => void }) => void;
 
 /**
  * The clipboard vault. The same clips live in the App Group store, so the
@@ -27,8 +31,9 @@ export function ClipboardScreen({
   notify,
 }: {
   onBack: () => void;
-  notify: (msg: string) => void;
+  notify: Notify;
 }) {
+  const { palette, type, styles } = useThemed(makeStyles);
   const {
     state,
     addClip,
@@ -36,9 +41,11 @@ export function ClipboardScreen({
     setClipShortcut,
     togglePin,
     deleteClip,
+    restoreClip,
     clearUnpinnedClips,
     refresh,
   } = useStore();
+  const removed = useUndoHistory<Clip | null>(null, { shake: true });
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<{ id: string; text: string; shortcut: string } | null>(
@@ -98,11 +105,33 @@ export function ClipboardScreen({
     notify('Copied');
   };
 
+  const undoDelete = () => {
+    const item = removed.present;
+    if (!item) return;
+    removed.undo();
+    restoreClip(item);
+  };
+  const redoDelete = () => {
+    const item = removed.redo();
+    if (!item) return;
+    deleteClip(item.id);
+  };
+  const removeClip = (clip: Clip, message: string) => {
+    removed.commit(clip);
+    deleteClip(clip.id);
+    notify(message, {
+      label: 'Undo',
+      onPress: () => {
+        restoreClip(clip);
+        removed.undo();
+      },
+    });
+  };
+
   const cut = async (clip: Clip) => {
     await Clipboard.setStringAsync(clip.text);
     setCurrent(clip.text);
-    deleteClip(clip.id);
-    notify('Cut — it’s on your clipboard');
+    removeClip(clip, 'Cut — it’s on your clipboard');
   };
 
   const confirmClear = () => {
@@ -123,7 +152,16 @@ export function ClipboardScreen({
   const unpinnedCount = state.clips.filter((c) => !c.pinned).length;
 
   return (
-    <ToolShell title="Clipboard" onBack={onBack}>
+    <ToolShell
+      title="Clipboard"
+      onBack={onBack}
+      undo={{
+        canUndo: removed.canUndo,
+        canRedo: removed.canRedo,
+        onUndo: undoDelete,
+        onRedo: redoDelete,
+      }}
+    >
       {current && !currentSaved && (
         <Card style={styles.currentCard}>
           <Text style={type.label}>On your clipboard now</Text>
@@ -166,7 +204,7 @@ export function ClipboardScreen({
           value={query}
           onChangeText={setQuery}
           placeholder="Search clips"
-          placeholderTextColor={colors.faint}
+          placeholderTextColor={palette.textSecondary}
           style={styles.search}
           clearButtonMode="while-editing"
           testID="clipboard.search"
@@ -197,7 +235,7 @@ export function ClipboardScreen({
                   setEditing({ ...editing, shortcut });
                 }}
                 placeholder="e.g. addr — type it + space in the Everytool keyboard"
-                placeholderTextColor={colors.faint}
+                placeholderTextColor={palette.textSecondary}
                 autoCapitalize="none"
                 autoCorrect={false}
                 style={styles.search}
@@ -260,10 +298,10 @@ export function ClipboardScreen({
                 />
                 <Action
                   label="Share"
-                  onPress={() => void Share.share({ message: clip.text })}
+                  onPress={() => void shareText(clip.text)}
                 />
                 <Action label="Cut" onPress={() => void cut(clip)} />
-                <Action label="Delete" danger onPress={() => deleteClip(clip.id)} />
+                <Action label="Delete" danger onPress={() => removeClip(clip, 'Removed')} />
               </View>
             </Card>
           ),
@@ -288,6 +326,7 @@ function Action({
   danger?: boolean;
   active?: boolean;
 }) {
+  const { palette, styles } = useThemed(makeStyles);
   return (
     <Pressable
       accessibilityRole="button"
@@ -302,8 +341,8 @@ function Action({
       <Text
         style={[
           styles.actionLabel,
-          danger && { color: colors.danger },
-          active && { color: '#FFFFFF' },
+          danger && { color: palette.destructive },
+          active && { color: palette.onPrimary },
         ]}
       >
         {label}
@@ -312,30 +351,32 @@ function Action({
   );
 }
 
-const styles = StyleSheet.create({
-  currentCard: { gap: 10, backgroundColor: colors.accentSoft },
-  clipText: { marginTop: 2 },
-  row: { flexDirection: 'row', gap: 10, alignItems: 'center' },
-  half: { flex: 1 },
-  search: {
-    backgroundColor: colors.card,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    fontSize: 16,
-    color: colors.ink,
-  },
-  clipCard: { gap: 10 },
-  editCard: { gap: 10 },
-  meta: { marginTop: 4 },
-  error: { color: colors.danger, fontSize: 14 },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  action: {
-    paddingHorizontal: 11,
-    paddingVertical: 7,
-    borderRadius: 9,
-    backgroundColor: colors.bg,
-  },
-  actionActive: { backgroundColor: colors.accent },
-  actionLabel: { fontSize: 14, fontWeight: '600', color: colors.accent },
-});
+function makeStyles(p: Palette) {
+  return StyleSheet.create({
+    currentCard: { gap: 10, backgroundColor: p.secondary },
+    clipText: { marginTop: 2 },
+    row: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+    half: { flex: 1 },
+    search: {
+      backgroundColor: p.surface,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      fontSize: 16,
+      color: p.textPrimary,
+    },
+    clipCard: { gap: 10 },
+    editCard: { gap: 10 },
+    meta: { marginTop: 4 },
+    error: { color: p.destructive, fontSize: 14 },
+    actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+    action: {
+      paddingHorizontal: 11,
+      paddingVertical: 7,
+      borderRadius: 9,
+      backgroundColor: p.secondary,
+    },
+    actionActive: { backgroundColor: p.primary },
+    actionLabel: { fontSize: 14, fontWeight: '600', color: p.primary },
+  });
+}

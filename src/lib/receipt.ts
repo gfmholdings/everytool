@@ -1,9 +1,10 @@
 // Receipt scanning for Split bill — pure, unit-tested.
-// The app recognises text on-device (Apple Vision, see the native
-// module's recognizeText) and passes the boxes here: they are grouped
-// into printed lines, prices are read off the right, and lines are
-// classified as items, subtotal, tax, tip or total. Splitting by item is
-// integer cents with exact remainders, like splitBill.
+// The app captures with VisionKit (document camera or a Photos pick),
+// recognises text on-device (Vision), and passes the boxes here. Boxes
+// on one printed row are grouped by their vertical position. The price
+// is the rightmost amount on that row, and the words to its left are
+// the item. Lines are then classified as items, subtotal, tax, tip, or
+// total. Splitting by item is integer cents with exact remainders.
 
 export interface TextBox {
   text: string;
@@ -14,9 +15,9 @@ export interface TextBox {
   height: number;
 }
 
-/** Group recognised boxes into printed lines, left to right. */
-export function linesFromBoxes(boxes: TextBox[]): string[] {
-  const sorted = [...boxes].filter((b) => b.text.trim()).sort((a, b) => a.y - b.y);
+/** Group recognised boxes into printed rows, top to bottom. */
+function groupRows(boxes: TextBox[]): TextBox[][] {
+  const sorted = [...boxes].filter((b) => b.text.trim()).sort((a, b) => a.y - b.y || a.x - b.x);
   const rows: TextBox[][] = [];
   for (const b of sorted) {
     const mid = b.y + b.height / 2;
@@ -28,12 +29,77 @@ export function linesFromBoxes(boxes: TextBox[]): string[] {
     if (row) row.push(b);
     else rows.push([b]);
   }
-  return rows.map((r) =>
-    r
+  return rows;
+}
+
+/** Group recognised boxes into printed lines, left to right. */
+export function linesFromBoxes(boxes: TextBox[]): string[] {
+  return groupRows(boxes).map((r) =>
+    [...r]
       .sort((a, b) => a.x - b.x)
       .map((b) => b.text.trim())
       .join(' '),
   );
+}
+
+/** A price sitting in its own box, optionally with a one- or two-letter tax flag. */
+const PRICE_TOKEN =
+  /^(-?)\$?\s?(\d{1,5}(?:[,\s]\d{3})*)[.,](\d{2})\s*-?\s*[A-Z*]{0,2}$/;
+
+/**
+ * One printed row. The price is the rightmost amount whose box starts in
+ * the right half of the page. Words to the left of that box are the label.
+ * A unit price further left is not the line price. A word parked to the
+ * right of the amount (a server name, a thank-you) is not part of the label.
+ */
+export function lineFromRow(row: TextBox[]): string {
+  const sorted = [...row].sort((a, b) => a.x - b.x);
+  const price = sorted.reduce<TextBox | null>((best, box) => {
+    if (!PRICE_TOKEN.test(box.text.trim())) return best;
+    if (!best) return box;
+    return box.x + box.width > best.x + best.width ? box : best;
+  }, null);
+  if (!price || price.x < 0.45) {
+    return sorted.map((box) => box.text.trim()).join(' ');
+  }
+  const name = sorted
+    .filter((box) => box !== price && box.x + box.width / 2 < price.x)
+    .filter((box) => !PRICE_TOKEN.test(box.text.trim()))
+    .map((box) => box.text.trim())
+    .filter(Boolean)
+    .join(' ');
+  return `${name} ${price.text.trim()}`.replace(/\s+/g, ' ').trim();
+}
+
+/** Parse Vision boxes: row grouping, then the price at the right edge. */
+export function parseReceiptBoxes(boxes: TextBox[]): ParsedReceipt {
+  return parseReceipt(groupRows(boxes).map((row) => lineFromRow(row)));
+}
+
+/**
+ * Several scanned pages. Items stay in page order. Tax and tip add.
+ * Subtotal and total are the last page that printed them.
+ */
+export function mergeParsedReceipts(pages: ParsedReceipt[]): ParsedReceipt {
+  const last = (values: (number | null)[]): number | null => {
+    for (let i = values.length - 1; i >= 0; i -= 1) {
+      const value = values[i];
+      if (value != null) return value;
+    }
+    return null;
+  };
+  const sum = (values: (number | null)[]): number | null => {
+    const present = values.filter((value): value is number => value != null);
+    if (present.length === 0) return null;
+    return present.reduce((total, value) => total + value, 0);
+  };
+  return {
+    items: pages.flatMap((page) => page.items),
+    subtotalCents: last(pages.map((page) => page.subtotalCents)),
+    taxCents: sum(pages.map((page) => page.taxCents)),
+    tipCents: sum(pages.map((page) => page.tipCents)),
+    totalCents: last(pages.map((page) => page.totalCents)),
+  };
 }
 
 export interface ReceiptItem {

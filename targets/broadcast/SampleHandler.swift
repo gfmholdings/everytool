@@ -14,8 +14,8 @@ import UserNotifications
 /// - skips frames that look the same as the last saved one (a 24×52
 ///   grayscale signature), so pauses cost nothing and a recording can
 ///   run as long as the user keeps scrolling,
-/// - scales to at most 1170 px wide and writes PNG frames into the App
-///   Group's BroadcastInbox with an index.json,
+/// - writes PNG frames at the screen's own pixels (no resample) up to
+///   1320 px wide, into the App Group's BroadcastInbox with an index.json,
 /// - flags the inbox finished and posts a local notification when the
 ///   recording stops; tapping it opens Everytool, which stitches.
 ///
@@ -28,7 +28,11 @@ class SampleHandler: RPBroadcastSampleHandler {
   private var finished = false
   private var lastSignature: [UInt8]?
 
-  private static let maxWidth: CGFloat = 1170
+  /// Wider than any current iPhone screenshot. Scaling a 1179 px frame
+  /// down to 1170 blends adjacent rows; the stitch cuts on that blend
+  /// and a line appears at every join. Only something wider (an iPad)
+  /// is reduced, and then onto a whole-pixel grid.
+  private static let maxWidth = 1320
   private static let sampleInterval: TimeInterval = 0.4
   private static let sigWidth = 24
   private static let sigHeight = 52
@@ -138,18 +142,31 @@ class SampleHandler: RPBroadcastSampleHandler {
     }
     lastSavedAt = now
 
-    let scale = min(1, Self.maxWidth / CGFloat(sourceWidth))
-    let targetWidth = Int((CGFloat(sourceWidth) * scale).rounded(.down))
-    let targetHeight = Int((CGFloat(sourceHeight) * scale).rounded(.down))
-    var image = source
-    if scale < 1 {
-      image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-    }
-    guard
-      let cgImage = ciContext.createCGImage(
-        image,
-        from: CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight)
+    // Keep the screen's own pixels. A fractional scale (1179 → 1170)
+    // blends two source rows into one, and the stitch's integer cut
+    // then draws that blend as a line at every join. An iPad, which is
+    // wider than maxWidth, is reduced onto a whole-pixel grid with
+    // nearest-neighbor so the edge row is not a blended or black sliver.
+    let image: CIImage
+    let targetWidth: Int
+    let targetHeight: Int
+    if sourceWidth <= Self.maxWidth {
+      image = source
+      targetWidth = sourceWidth
+      targetHeight = sourceHeight
+    } else {
+      targetWidth = Self.maxWidth
+      targetHeight = max(1, (sourceHeight * targetWidth) / sourceWidth)
+      let sx = CGFloat(targetWidth) / CGFloat(sourceWidth)
+      let sy = CGFloat(targetHeight) / CGFloat(sourceHeight)
+      image = source.samplingNearest().transformed(
+        by: CGAffineTransform(scaleX: sx, y: sy)
       )
+    }
+    let crop = CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight)
+      .intersection(image.extent)
+    guard !crop.isNull, !crop.isEmpty,
+      let cgImage = ciContext.createCGImage(image, from: crop)
     else { return }
 
     guard let dir = SharedVault.broadcastDir() else { return }
@@ -169,8 +186,8 @@ class SampleHandler: RPBroadcastSampleHandler {
     frameIndex += 1
     SharedVault.appendBroadcastFrame(
       file: name,
-      width: targetWidth,
-      height: targetHeight
+      width: cgImage.width,
+      height: cgImage.height
     )
   }
 }

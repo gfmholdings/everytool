@@ -1,6 +1,7 @@
 import { requireOptionalNativeModule } from 'expo-modules-core';
 
 import { APP_GROUP_ID, BROADCAST_EXTENSION_ID } from '../config';
+import { normalizeQrHistory } from '../lib/qrHistory';
 import type { TextBox } from '../lib/receipt';
 import type { AppState } from '../types';
 
@@ -24,10 +25,27 @@ interface SharedVaultNative {
   writeGroupString?(groupId: string, key: string, value: string | null): boolean;
   reloadWidgets?(): void;
   recognizeText?(uri: string): Promise<TextBox[]>;
+  scanDocuments?(): Promise<string[]>;
+  liveTextSupported?(): boolean;
+  scanLiveText?(): Promise<TextBox[]>;
   stripLocation?(inputUri: string, outputUri: string): boolean;
   imageHasLocation?(uri: string): boolean;
+  reencodeImage?(
+    inputUri: string,
+    outputUri: string,
+    format: string,
+    quality: number,
+    maxWidth: number,
+    stripMetadata: boolean,
+  ): number;
   showBroadcastPicker?(extensionBundleId: string): Promise<boolean>;
   requestNotificationPermission?(): Promise<boolean>;
+  takeOpenedPdf?(sourceUrl: string): { uri: string; name: string } | null;
+  sampleVideoFrames?(
+    videoUri: string,
+    timesMs: number[],
+    maxWidth: number,
+  ): Promise<{ uri: string; width: number; height: number; timeMs: number }[]>;
 }
 
 const native =
@@ -69,7 +87,7 @@ export function parseState(json: string | null | undefined): AppState | null {
       clips: Array.isArray(parsed.clips)
         ? parsed.clips.filter((c) => c && typeof c.text === 'string' && typeof c.id === 'string')
         : [],
-      qrHistory: Array.isArray(parsed.qrHistory) ? parsed.qrHistory : [],
+      qrHistory: normalizeQrHistory(parsed.qrHistory),
       countdowns: Array.isArray(parsed.countdowns)
         ? parsed.countdowns.filter(
             (c) => c && typeof c.title === 'string' && typeof c.date === 'number',
@@ -158,12 +176,73 @@ export async function recognizeText(uri: string): Promise<TextBox[] | null> {
   return native.recognizeText(uri);
 }
 
+/**
+ * VisionKit document camera. null when this binary has no scanner.
+ * An empty list is Cancel. Pages are cropped JPEGs, in order.
+ */
+export async function scanDocumentPages(): Promise<string[] | null> {
+  if (!native?.scanDocuments) return null;
+  return native.scanDocuments();
+}
+
+/** True when this iPhone can run DataScanner live text. */
+export function liveTextSupported(): boolean {
+  try {
+    return native?.liveTextSupported?.() ?? false;
+  } catch {
+    return false;
+  }
+}
+
+/** Optional live text. null when the binary has no scanner. Empty is Cancel. */
+export async function scanLiveText(): Promise<TextBox[] | null> {
+  if (!native?.scanLiveText) return null;
+  return native.scanLiveText();
+}
+
 /** Lossless copy without GPS/XMP. false when unavailable or failed. */
 export function stripLocation(inputUri: string, outputUri: string): boolean {
   try {
     return native?.stripLocation?.(inputUri, outputUri) ?? false;
   } catch {
     return false;
+  }
+}
+
+/**
+ * On-device re-encode (JPEG, PNG, or HEIC). Returns the byte size, or
+ * null when the native encoder isn't available or the format failed.
+ */
+export function reencodeImage(
+  inputUri: string,
+  outputUri: string,
+  format: 'jpeg' | 'png' | 'heic',
+  quality: number,
+  maxWidth: number,
+  stripMetadata: boolean,
+): number | null {
+  try {
+    const n = native?.reencodeImage?.(inputUri, outputUri, format, quality, maxWidth, stripMetadata);
+    return n == null || n < 0 ? null : n;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The sandbox copy of a PDF opened in place, if the native handler
+ * already copied it. Null in Expo Go or when the URL was not a document open.
+ */
+export function takeOpenedPdf(sourceUrl: string): { uri: string; name: string } | null {
+  if (!native?.takeOpenedPdf) return null;
+  try {
+    const got = native.takeOpenedPdf(sourceUrl);
+    if (!got || typeof got.uri !== 'string' || !got.uri || typeof got.name !== 'string' || !got.name) {
+      return null;
+    }
+    return { uri: got.uri, name: got.name };
+  } catch {
+    return null;
   }
 }
 
