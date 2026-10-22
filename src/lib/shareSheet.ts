@@ -20,6 +20,7 @@ const FILE_MIMES = new Set([
   'image/heic',
   'image/gif',
   'application/pdf',
+  'application/vnd.everytool.etsplit+json',
 ]);
 
 /** A local file URL iOS will treat as a file, not a link. */

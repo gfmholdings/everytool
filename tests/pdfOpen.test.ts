@@ -35,7 +35,7 @@ test('document handler: com.adobe.pdf at Alternate, in place, no default claim',
     LSHandlerRank: string;
     LSItemContentTypes: string[];
   }[];
-  assert.equal(types.length, 2);
+  assert.equal(types.length, 3);
   assert.equal(types[0]!.LSHandlerRank, PDF_HANDLER_RANK);
   assert.equal(types[0]!.LSHandlerRank, 'Alternate');
   assert.deepEqual(types[0]!.LSItemContentTypes, [PDF_UTI]);
@@ -149,6 +149,7 @@ test('native open handler copies a security-scoped PDF before JS reads it', () =
   assert.match(share, /route\("pdf"\)/);
   assert.match(share, /onRouted\("pdf"\)/);
   assert.match(share, /kind == "pdf"/);
+  assert.match(swift, /etsplit/);
   assert.match(swift, /convertExtensions/);
   assert.match(swift, /"csv"/);
   assert.match(swift, /sandboxConvertFileName/);

@@ -15,11 +15,13 @@ import {
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { File } from 'expo-file-system';
 
 import { ToolGlyph } from './src/components/ui';
 import { drainShareInbox, readBroadcastInbox } from './src/lib/incoming';
 import { pdfTargetFromShare, routeIncomingUrl } from './src/lib/pdfOpen';
+import { SPLIT_LEDGER_STORAGE_KEY } from './src/lib/splitwise';
 import type { ShotInput } from './src/lib/stitch';
 import { ClipboardScreen } from './src/screens/ClipboardScreen';
 import { ConvertScreen } from './src/screens/ConvertScreen';
@@ -28,6 +30,7 @@ import { GifScreen } from './src/screens/GifScreen';
 import { PdfScreen } from './src/screens/PdfScreen';
 import { QrScreen } from './src/screens/QrScreen';
 import { ResizeScreen } from './src/screens/ResizeScreen';
+import { SplitImportScreen } from './src/screens/SplitImportScreen';
 import { SplitScreen } from './src/screens/SplitScreen';
 import { StitchScreen } from './src/screens/StitchScreen';
 import { TextScreen } from './src/screens/TextScreen';
@@ -42,6 +45,8 @@ interface Pending {
   pdf?: { uri: string; name: string };
   /** Files for Any file → PDF. The PDF screen does not read this yet. */
   convertFiles?: { uri: string; name: string }[];
+  /** An .etsplit file opened from AirDrop, Messages, WhatsApp, or Files. */
+  splitImport?: { name: string; text: string; stored: string | null };
   stitchShots?: ShotInput[];
   text?: string;
   autoRecord?: boolean;
@@ -199,6 +204,31 @@ function Root() {
     const handle = (url: string | null) => {
       if (!url) return;
       const route = routeIncomingUrl(url);
+      // A split group from AirDrop, Messages, WhatsApp, or Files. The native
+      // handler has already copied it. The import screen shows the merge
+      // counts before anything is written.
+      if (route.kind === 'split') {
+        void (async () => {
+          const opened = takeOpenedPdf(url);
+          const uri = opened?.uri ?? url;
+          let body = '';
+          try {
+            body = await new File(uri).text();
+          } catch {
+            body = '';
+          }
+          let saved: string | null = null;
+          try {
+            saved = await AsyncStorage.getItem(SPLIT_LEDGER_STORAGE_KEY);
+          } catch {
+            saved = null;
+          }
+          openTool('split', {
+            splitImport: { name: opened?.name ?? route.name, text: body, stored: saved },
+          });
+        })();
+        return;
+      }
       // A PDF from Files or Open In. The native handler has already copied
       // it into the sandbox; the existing PDF tool loads that copy.
       if (route.kind === 'pdf') {
@@ -318,7 +348,16 @@ function Root() {
       screen = <DaysScreen onBack={back} notify={notify} />;
       break;
     case 'split':
-      screen = <SplitScreen onBack={back} />;
+      screen = pending?.splitImport ? (
+        <SplitImportScreen
+          name={pending.splitImport.name}
+          text={pending.splitImport.text}
+          stored={pending.splitImport.stored}
+          onBack={back}
+        />
+      ) : (
+        <SplitScreen onBack={back} />
+      );
       break;
     case 'gif':
       screen = <GifScreen onBack={back} notify={notify} />;

@@ -52,6 +52,10 @@ enum OpenedPdfs {
   static func displayName(for url: URL) -> String {
     let raw = url.lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
     let ext = url.pathExtension.lowercased()
+    if ext == "etsplit" {
+      if raw.isEmpty { return "group.etsplit" }
+      return raw.lowercased().hasSuffix(".etsplit") ? raw : "\(raw).etsplit"
+    }
     if ext != "pdf" && convertExtensions.contains(ext) {
       if raw.isEmpty { return "document.\(ext)" }
       return raw
@@ -93,7 +97,7 @@ enum OpenedPdfs {
   /// drop the scope. The caller's file is left where it was.
   static func adopt(_ url: URL) {
     let ext = url.pathExtension.lowercased()
-    let convertible = convertExtensions.contains(ext)
+    let convertible = convertExtensions.contains(ext) || ext == "etsplit"
     guard url.isFileURL, ext == "pdf" || convertible else { return }
     let accessing = url.startAccessingSecurityScopedResource()
     defer {
@@ -148,7 +152,7 @@ public class PdfDocumentHandler: ExpoAppDelegateSubscriber {
     options: [UIApplication.OpenURLOptionsKey: Any] = [:]
   ) -> Bool {
     let ext = url.pathExtension.lowercased()
-    guard url.isFileURL, ext == "pdf" || OpenedPdfs.convertExtensions.contains(ext) else { return false }
+    guard url.isFileURL, ext == "pdf" || ext == "etsplit" || OpenedPdfs.convertExtensions.contains(ext) else { return false }
     OpenedPdfs.adopt(url)
     return true
   }

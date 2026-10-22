@@ -1,6 +1,7 @@
 // Offline Splitwise-style groups. Pure and import-free so the Node test
-// runner can load this file alone. Not wired into the live Split bill
-// screen: that screen keeps its even / by-item flow until this UI is approved.
+// runner can load this file alone. The live even-split / by-item screen
+// does not import this module. A group file (.etsplit) is merged by the
+// import screen: last writer wins by updatedAt, and deviceId breaks ties.
 //
 // Money is integer cents. Equal splits deal leftover cents to the first
 // people in line order. Percent, shares, tax and tip use largest-remainder
@@ -17,6 +18,9 @@ export interface Person {
   id: string;
   name: string;
   isYou?: boolean;
+  /** Set once a phone publishes or edits this person. Missing means unpublished. */
+  updatedAt?: number;
+  deviceId?: string;
 }
 
 export interface SplitGroup {
@@ -25,6 +29,8 @@ export interface SplitGroup {
   currency: CurrencyCode;
   people: Person[];
   createdAt: number;
+  updatedAt?: number;
+  deviceId?: string;
 }
 
 export interface SplitLine {
@@ -71,6 +77,8 @@ export interface Expense {
   /** Set for itemized expenses. Balances recompute from this, not from later group edits. */
   receipt?: ReceiptSplit;
   createdAt: number;
+  updatedAt?: number;
+  deviceId?: string;
 }
 
 export interface Settlement {
@@ -81,12 +89,18 @@ export interface Settlement {
   cents: number;
   currency: CurrencyCode;
   createdAt: number;
+  updatedAt?: number;
+  deviceId?: string;
 }
 
 export interface SplitLedger {
   groups: SplitGroup[];
   expenses: Expense[];
   settlements: Settlement[];
+  /** Deletes that have to win on the next import. Absent means none. */
+  tombstones?: Tombstone[];
+  /** This phone. Tie-break id stamped on edits made here. */
+  deviceId?: string;
 }
 
 export type LedgerResult =
@@ -457,7 +471,15 @@ export function prefillFromReceipt(lines: ReceiptPrefillLine[]): {
 
 export function addGroup(
   ledger: SplitLedger,
-  input: { id: string; name: string; youId: string; currency?: CurrencyCode; createdAt?: number },
+  input: {
+    id: string;
+    name: string;
+    youId: string;
+    currency?: CurrencyCode;
+    createdAt?: number;
+    updatedAt?: number;
+    deviceId?: string;
+  },
 ): LedgerResult {
   if (!input.id || !input.youId) return { ok: false, ledger, error: 'Missing id' };
   if (ledger.groups.some((group) => group.id === input.id)) {
@@ -465,20 +487,29 @@ export function addGroup(
   }
   const currency = input.currency ?? 'USD';
   if (!isCurrency(currency)) return { ok: false, ledger, error: 'Unknown currency' };
+  const you: Person = { id: input.youId, name: 'You', isYou: true };
   const group: SplitGroup = {
     id: input.id,
     name: clip(input.name, 40, 'Group'),
     currency,
-    people: [{ id: input.youId, name: 'You', isYou: true }],
+    people: [you],
     createdAt: stamp(input.createdAt),
   };
+  if (input.updatedAt !== undefined) {
+    group.updatedAt = input.updatedAt;
+    you.updatedAt = input.updatedAt;
+  }
+  if (input.deviceId) {
+    group.deviceId = input.deviceId;
+    you.deviceId = input.deviceId;
+  }
   return { ok: true, ledger: { ...ledger, groups: [...ledger.groups, group] } };
 }
 
 export function addPerson(
   ledger: SplitLedger,
   groupId: string,
-  person: { id: string; name: string },
+  person: { id: string; name: string; updatedAt?: number; deviceId?: string },
 ): LedgerResult {
   const name = personNameFromContact(person.name);
   if (!person.id) return { ok: false, ledger, error: 'Missing id' };
@@ -489,6 +520,8 @@ export function addPerson(
     return { ok: false, ledger, error: 'Person already added' };
   }
   const next: Person = { id: person.id, name: name.slice(0, 40) };
+  if (person.updatedAt !== undefined) next.updatedAt = person.updatedAt;
+  if (person.deviceId) next.deviceId = person.deviceId;
   return { ok: true, ledger: replaceGroup(ledger, { ...group, people: [...group.people, next] }) };
 }
 
@@ -509,6 +542,8 @@ export function addExpense(
       everyoneIds?: string[];
     };
     createdAt?: number;
+    updatedAt?: number;
+    deviceId?: string;
   },
 ): LedgerResult {
   if (!input.id) return { ok: false, ledger, error: 'Missing id' };
@@ -588,6 +623,8 @@ export function addExpense(
     ...(receipt ? { receipt } : {}),
     createdAt: stamp(input.createdAt),
   };
+  if (input.updatedAt !== undefined) expense.updatedAt = input.updatedAt;
+  if (input.deviceId) expense.deviceId = input.deviceId;
   return { ok: true, ledger: { ...ledger, expenses: [...ledger.expenses, expense] } };
 }
 
@@ -601,6 +638,8 @@ export function addSettlement(
     cents: number;
     currency?: CurrencyCode;
     createdAt?: number;
+    updatedAt?: number;
+    deviceId?: string;
   },
 ): LedgerResult {
   if (!input.id) return { ok: false, ledger, error: 'Missing id' };
@@ -628,6 +667,8 @@ export function addSettlement(
     currency,
     createdAt: stamp(input.createdAt),
   };
+  if (input.updatedAt !== undefined) settlement.updatedAt = input.updatedAt;
+  if (input.deviceId) settlement.deviceId = input.deviceId;
   return { ok: true, ledger: { ...ledger, settlements: [...ledger.settlements, settlement] } };
 }
 
@@ -742,6 +783,1279 @@ export function whoOwesWhom(
     title: group.name,
     lines,
     text: [group.name, 'Who owes whom', ...body].join('\n'),
+  };
+}
+
+// --- Group file (.etsplit). One group per file. Schema 1. ---
+
+/** Version written into every group file and the on-phone ledger copy. */
+export const SPLIT_FILE_SCHEMA = 1;
+/** Filename extension. Declared as its own UTI so AirDrop, Messages, WhatsApp, and Files open Everytool. */
+export const SPLIT_FILE_EXTENSION = 'etsplit';
+export const SPLIT_FILE_UTI = 'app.everytool.ios.etsplit';
+export const SPLIT_FILE_KIND = 'app.everytool.ios.etsplit';
+export const SPLIT_FILE_MIME = 'application/vnd.everytool.etsplit+json';
+/** AsyncStorage key. Not the clipboard AppState document. */
+export const SPLIT_LEDGER_STORAGE_KEY = 'everytool.split-ledger.v1';
+
+export type TombstoneKind = 'group' | 'person' | 'expense' | 'settlement';
+
+export interface Tombstone {
+  id: string;
+  groupId: string;
+  kind: TombstoneKind;
+  updatedAt: number;
+  deviceId: string;
+}
+
+export interface SyncStamp {
+  updatedAt: number;
+  deviceId: string;
+}
+
+export interface SplitFilePerson {
+  id: string;
+  name: string;
+  isYou: boolean;
+  updatedAt: number;
+  deviceId: string;
+}
+
+export interface SplitFileGroup {
+  id: string;
+  name: string;
+  currency: CurrencyCode;
+  createdAt: number;
+  updatedAt: number;
+  deviceId: string;
+  people: SplitFilePerson[];
+}
+
+export interface SplitFileExpense {
+  id: string;
+  groupId: string;
+  description: string;
+  amountCents: number;
+  currency: CurrencyCode;
+  payers: Payer[];
+  split: { method: SplitMethod; lines: SplitLine[] };
+  receipt?: ReceiptSplit;
+  createdAt: number;
+  updatedAt: number;
+  deviceId: string;
+}
+
+export interface SplitFileSettlement {
+  id: string;
+  groupId: string;
+  fromId: string;
+  toId: string;
+  cents: number;
+  currency: CurrencyCode;
+  createdAt: number;
+  updatedAt: number;
+  deviceId: string;
+}
+
+export interface SplitGroupFile {
+  schema: typeof SPLIT_FILE_SCHEMA;
+  kind: typeof SPLIT_FILE_KIND;
+  extension: typeof SPLIT_FILE_EXTENSION;
+  deviceId: string;
+  exportedAt: number;
+  groupId: string;
+  /** Null when this file is a delete of the whole group. */
+  group: SplitFileGroup | null;
+  expenses: SplitFileExpense[];
+  settlements: SplitFileSettlement[];
+  tombstones: Tombstone[];
+}
+
+export interface ImportChange {
+  kind: TombstoneKind;
+  id: string;
+  change: 'new' | 'updated' | 'removed';
+  label: string;
+}
+
+export interface ImportPreview {
+  ok: boolean;
+  added: number;
+  updated: number;
+  removed: number;
+  /** Exactly `3 new, 1 updated, 0 removed`. */
+  summary: string;
+  changes: ImportChange[];
+  error?: string;
+}
+
+export interface SummaryTotal {
+  name: string;
+  text: string;
+  tone: 'owed' | 'owes' | 'settled';
+  netCents: number;
+  currency: CurrencyCode;
+}
+
+export interface SummaryShare {
+  title: string;
+  oweLines: string[];
+  totals: SummaryTotal[];
+  /** Plain text for the share sheet: who owes whom, then per-person totals. */
+  text: string;
+}
+
+interface Live<T> {
+  value: T;
+  stamp: SyncStamp;
+  content: string;
+  label: string;
+}
+
+/** Greater updatedAt wins. The same time yields to the greater deviceId. A tie keeps the copy already on the phone. */
+function newer(a: SyncStamp, b: SyncStamp): boolean {
+  if (a.updatedAt !== b.updatedAt) return a.updatedAt > b.updatedAt;
+  return a.deviceId > b.deviceId;
+}
+
+function localStamp(record: { updatedAt?: number; deviceId?: string; createdAt?: number }): SyncStamp {
+  return {
+    updatedAt: record.updatedAt ?? record.createdAt ?? 0,
+    deviceId: record.deviceId ?? '',
+  };
+}
+
+function publishStamp(
+  record: { updatedAt?: number; deviceId?: string; createdAt?: number },
+  fallback: SyncStamp,
+): SyncStamp {
+  const hasStamp = record.updatedAt !== undefined || (record.deviceId !== undefined && record.deviceId.length > 0);
+  if (!hasStamp) return { updatedAt: fallback.updatedAt, deviceId: fallback.deviceId };
+  return {
+    updatedAt: record.updatedAt ?? record.createdAt ?? 0,
+    deviceId: record.deviceId && record.deviceId.length > 0 ? record.deviceId : fallback.deviceId,
+  };
+}
+
+function countSummary(added: number, updated: number, removed: number): string {
+  return `${added} new, ${updated} updated, ${removed} removed`;
+}
+
+export function fileNameForGroup(name: string): string {
+  const stem = name.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  return `${stem || 'Group'}.${SPLIT_FILE_EXTENSION}`;
+}
+
+export function assignDeviceId(ledger: SplitLedger, deviceId: string): SplitLedger {
+  if (ledger.deviceId || !deviceId) return ledger;
+  return { ...ledger, deviceId };
+}
+
+function personContent(person: { name: string; isYou?: boolean }): string {
+  return JSON.stringify({ name: person.name, isYou: person.isYou === true });
+}
+
+function groupContent(group: { name: string; currency: CurrencyCode }): string {
+  return JSON.stringify({ name: group.name, currency: group.currency });
+}
+
+function expenseContent(expense: {
+  description: string;
+  amountCents: number;
+  currency: CurrencyCode;
+  payers: Payer[];
+  split: { method: SplitMethod; lines: SplitLine[] };
+  receipt?: ReceiptSplit;
+}): string {
+  return JSON.stringify({
+    description: expense.description,
+    amountCents: expense.amountCents,
+    currency: expense.currency,
+    payers: expense.payers.map((payer) => ({ personId: payer.personId, cents: payer.cents })),
+    split: {
+      method: expense.split.method,
+      lines: expense.split.lines.map((line) => ({ personId: line.personId, value: line.value })),
+    },
+    receipt: expense.receipt
+      ? {
+          items: expense.receipt.items.map((item) => ({
+            id: item.id,
+            name: item.name,
+            cents: item.cents,
+            personIds: [...item.personIds],
+          })),
+          tax: { kind: expense.receipt.tax.kind, value: expense.receipt.tax.value },
+          tip: { kind: expense.receipt.tip.kind, value: expense.receipt.tip.value },
+          everyoneIds: [...expense.receipt.everyoneIds],
+        }
+      : null,
+  });
+}
+
+function settlementContent(settlement: {
+  fromId: string;
+  toId: string;
+  cents: number;
+  currency: CurrencyCode;
+}): string {
+  return JSON.stringify({
+    fromId: settlement.fromId,
+    toId: settlement.toId,
+    cents: settlement.cents,
+    currency: settlement.currency,
+  });
+}
+
+function copyPerson(person: Person): Person {
+  const next: Person = { id: person.id, name: person.name };
+  if (person.isYou) next.isYou = true;
+  if (person.updatedAt !== undefined) next.updatedAt = person.updatedAt;
+  if (person.deviceId) next.deviceId = person.deviceId;
+  return next;
+}
+
+function copyExpense(expense: Expense): Expense {
+  const next: Expense = {
+    id: expense.id,
+    groupId: expense.groupId,
+    description: expense.description,
+    amountCents: expense.amountCents,
+    currency: expense.currency,
+    payers: expense.payers.map((payer) => ({ personId: payer.personId, cents: payer.cents })),
+    split: {
+      method: expense.split.method,
+      lines: expense.split.lines.map((line) => ({ personId: line.personId, value: line.value })),
+    },
+    createdAt: expense.createdAt,
+  };
+  if (expense.updatedAt !== undefined) next.updatedAt = expense.updatedAt;
+  if (expense.deviceId) next.deviceId = expense.deviceId;
+  if (expense.receipt) next.receipt = copyReceipt(expense.receipt);
+  return next;
+}
+
+function copySettlement(settlement: Settlement): Settlement {
+  const next: Settlement = {
+    id: settlement.id,
+    groupId: settlement.groupId,
+    fromId: settlement.fromId,
+    toId: settlement.toId,
+    cents: settlement.cents,
+    currency: settlement.currency,
+    createdAt: settlement.createdAt,
+  };
+  if (settlement.updatedAt !== undefined) next.updatedAt = settlement.updatedAt;
+  if (settlement.deviceId) next.deviceId = settlement.deviceId;
+  return next;
+}
+
+function copyReceipt(receipt: ReceiptSplit): ReceiptSplit {
+  return {
+    items: receipt.items.map((item) => ({
+      id: item.id,
+      name: item.name,
+      cents: item.cents,
+      personIds: [...item.personIds],
+    })),
+    tax: { kind: receipt.tax.kind, value: receipt.tax.value },
+    tip: { kind: receipt.tip.kind, value: receipt.tip.value },
+    everyoneIds: [...receipt.everyoneIds],
+  };
+}
+
+function personFromFile(person: SplitFilePerson): Person {
+  const next: Person = {
+    id: person.id,
+    name: person.name,
+    updatedAt: person.updatedAt,
+    deviceId: person.deviceId,
+  };
+  if (person.isYou) next.isYou = true;
+  return next;
+}
+
+function expenseFromFile(expense: SplitFileExpense): Expense {
+  const next: Expense = {
+    id: expense.id,
+    groupId: expense.groupId,
+    description: expense.description,
+    amountCents: expense.amountCents,
+    currency: expense.currency,
+    payers: expense.payers.map((payer) => ({ personId: payer.personId, cents: payer.cents })),
+    split: {
+      method: expense.split.method,
+      lines: expense.split.lines.map((line) => ({ personId: line.personId, value: line.value })),
+    },
+    createdAt: expense.createdAt,
+    updatedAt: expense.updatedAt,
+    deviceId: expense.deviceId,
+  };
+  if (expense.receipt) next.receipt = copyReceipt(expense.receipt);
+  return next;
+}
+
+function settlementFromFile(settlement: SplitFileSettlement): Settlement {
+  return {
+    id: settlement.id,
+    groupId: settlement.groupId,
+    fromId: settlement.fromId,
+    toId: settlement.toId,
+    cents: settlement.cents,
+    currency: settlement.currency,
+    createdAt: settlement.createdAt,
+    updatedAt: settlement.updatedAt,
+    deviceId: settlement.deviceId,
+  };
+}
+
+function upsertTomb(list: Tombstone[], tomb: Tombstone): Tombstone[] {
+  const index = list.findIndex(
+    (entry) => entry.kind === tomb.kind && entry.id === tomb.id && entry.groupId === tomb.groupId,
+  );
+  if (index < 0) return [...list, tomb];
+  const prev = list[index]!;
+  if (newer({ updatedAt: prev.updatedAt, deviceId: prev.deviceId }, tomb)) return list;
+  const next = list.slice();
+  next[index] = tomb;
+  return next;
+}
+
+export function deletePerson(
+  ledger: SplitLedger,
+  groupId: string,
+  personId: string,
+  stamp: SyncStamp,
+): LedgerResult {
+  if (!Number.isInteger(stamp.updatedAt) || !stamp.deviceId) {
+    return { ok: false, ledger, error: 'Missing stamp' };
+  }
+  const group = ledger.groups.find((entry) => entry.id === groupId);
+  if (!group) return { ok: false, ledger, error: 'Group not found' };
+  if (!group.people.some((person) => person.id === personId)) {
+    return { ok: false, ledger, error: 'Person not found' };
+  }
+  const tomb: Tombstone = {
+    id: personId,
+    groupId,
+    kind: 'person',
+    updatedAt: stamp.updatedAt,
+    deviceId: stamp.deviceId,
+  };
+  return {
+    ok: true,
+    ledger: {
+      ...ledger,
+      tombstones: upsertTomb(ledger.tombstones ?? [], tomb),
+      groups: ledger.groups.map((entry) =>
+        entry.id === groupId
+          ? { ...entry, people: entry.people.filter((person) => person.id !== personId) }
+          : entry,
+      ),
+    },
+  };
+}
+
+export function deleteExpense(ledger: SplitLedger, expenseId: string, stamp: SyncStamp): LedgerResult {
+  if (!Number.isInteger(stamp.updatedAt) || !stamp.deviceId) {
+    return { ok: false, ledger, error: 'Missing stamp' };
+  }
+  const expense = ledger.expenses.find((entry) => entry.id === expenseId);
+  if (!expense) return { ok: false, ledger, error: 'Expense not found' };
+  const tomb: Tombstone = {
+    id: expense.id,
+    groupId: expense.groupId,
+    kind: 'expense',
+    updatedAt: stamp.updatedAt,
+    deviceId: stamp.deviceId,
+  };
+  return {
+    ok: true,
+    ledger: {
+      ...ledger,
+      expenses: ledger.expenses.filter((entry) => entry.id !== expenseId),
+      tombstones: upsertTomb(ledger.tombstones ?? [], tomb),
+    },
+  };
+}
+
+export function deleteSettlement(ledger: SplitLedger, settlementId: string, stamp: SyncStamp): LedgerResult {
+  if (!Number.isInteger(stamp.updatedAt) || !stamp.deviceId) {
+    return { ok: false, ledger, error: 'Missing stamp' };
+  }
+  const settlement = ledger.settlements.find((entry) => entry.id === settlementId);
+  if (!settlement) return { ok: false, ledger, error: 'Settlement not found' };
+  const tomb: Tombstone = {
+    id: settlement.id,
+    groupId: settlement.groupId,
+    kind: 'settlement',
+    updatedAt: stamp.updatedAt,
+    deviceId: stamp.deviceId,
+  };
+  return {
+    ok: true,
+    ledger: {
+      ...ledger,
+      settlements: ledger.settlements.filter((entry) => entry.id !== settlementId),
+      tombstones: upsertTomb(ledger.tombstones ?? [], tomb),
+    },
+  };
+}
+
+export function deleteGroup(ledger: SplitLedger, groupId: string, stamp: SyncStamp): LedgerResult {
+  if (!Number.isInteger(stamp.updatedAt) || !stamp.deviceId) {
+    return { ok: false, ledger, error: 'Missing stamp' };
+  }
+  const group = ledger.groups.find((entry) => entry.id === groupId);
+  if (!group) return { ok: false, ledger, error: 'Group not found' };
+  let tombstones = ledger.tombstones ?? [];
+  const mark = (id: string, kind: TombstoneKind) => {
+    tombstones = upsertTomb(tombstones, {
+      id,
+      groupId,
+      kind,
+      updatedAt: stamp.updatedAt,
+      deviceId: stamp.deviceId,
+    });
+  };
+  mark(groupId, 'group');
+  for (const person of group.people) mark(person.id, 'person');
+  for (const expense of ledger.expenses) if (expense.groupId === groupId) mark(expense.id, 'expense');
+  for (const settlement of ledger.settlements) {
+    if (settlement.groupId === groupId) mark(settlement.id, 'settlement');
+  }
+  return {
+    ok: true,
+    ledger: {
+      ...ledger,
+      groups: ledger.groups.filter((entry) => entry.id !== groupId),
+      expenses: ledger.expenses.filter((entry) => entry.groupId !== groupId),
+      settlements: ledger.settlements.filter((entry) => entry.groupId !== groupId),
+      tombstones,
+    },
+  };
+}
+
+function tombKey(kind: TombstoneKind, id: string): string {
+  return `${kind}\0${id}`;
+}
+
+function indexTombs(list: readonly Tombstone[], groupId: string): Map<string, Tombstone> {
+  const map = new Map<string, Tombstone>();
+  for (const tomb of list) {
+    if (tomb.groupId !== groupId) continue;
+    const key = tombKey(tomb.kind, tomb.id);
+    const prev = map.get(key);
+    if (!prev || newer(tomb, prev)) map.set(key, tomb);
+  }
+  return map;
+}
+
+function chooseLive<T>(local: Live<T> | null, incoming: Live<T> | null): { source: 'local' | 'incoming'; live: Live<T> } | null {
+  if (!incoming) return local ? { source: 'local', live: local } : null;
+  if (!local || newer(incoming.stamp, local.stamp)) return { source: 'incoming', live: incoming };
+  return { source: 'local', live: local };
+}
+
+function orderPeople(next: Person[], previous: Person[]): Person[] {
+  const byId = new Map(next.map((person) => [person.id, person]));
+  const ordered: Person[] = [];
+  for (const person of previous) {
+    const found = byId.get(person.id);
+    if (!found) continue;
+    ordered.push(found);
+    byId.delete(person.id);
+  }
+  const rest = [...byId.values()].sort((a, b) => {
+    if (a.isYou === b.isYou) return cmp(a.id, b.id);
+    return a.isYou ? -1 : 1;
+  });
+  return [...ordered, ...rest];
+}
+
+function filePersonLive(person: SplitFilePerson): Live<Person> {
+  return {
+    value: personFromFile(person),
+    stamp: { updatedAt: person.updatedAt, deviceId: person.deviceId },
+    content: personContent(person),
+    label: person.name,
+  };
+}
+
+function localPersonLive(person: Person): Live<Person> {
+  return {
+    value: copyPerson(person),
+    stamp: localStamp(person),
+    content: personContent(person),
+    label: person.name,
+  };
+}
+
+interface MergeResult {
+  ledger: SplitLedger;
+  preview: ImportPreview;
+}
+
+export function mergeGroupFile(ledger: SplitLedger, file: SplitGroupFile): MergeResult {
+  const groupId = file.groupId;
+  const localGroup = ledger.groups.find((group) => group.id === groupId) ?? null;
+  const tombs = indexTombs([...(ledger.tombstones ?? []), ...file.tombstones], groupId);
+  const groupTomb = tombs.get(tombKey('group', groupId)) ?? null;
+  const incomingGroup = file.group;
+  const localGroupLive: Live<SplitGroup> | null = localGroup
+    ? {
+        value: localGroup,
+        stamp: localStamp(localGroup),
+        content: groupContent(localGroup),
+        label: localGroup.name,
+      }
+    : null;
+  const incomingGroupLive: Live<SplitFileGroup> | null = incomingGroup
+    ? {
+        value: incomingGroup,
+        stamp: { updatedAt: incomingGroup.updatedAt, deviceId: incomingGroup.deviceId },
+        content: groupContent(incomingGroup),
+        label: incomingGroup.name,
+      }
+    : null;
+  const chosenGroup = chooseLive(localGroupLive, incomingGroupLive);
+  const groupDeleted = Boolean(chosenGroup && groupTomb && newer(groupTomb, chosenGroup.live.stamp)) || (!chosenGroup && Boolean(groupTomb));
+  const changes: ImportChange[] = [];
+
+  const dropGroup = (): MergeResult => {
+    if (localGroup) {
+      changes.push({ kind: 'group', id: groupId, change: 'removed', label: localGroup.name });
+      for (const person of localGroup.people) {
+        changes.push({ kind: 'person', id: person.id, change: 'removed', label: person.name });
+      }
+      for (const expense of ledger.expenses) {
+        if (expense.groupId === groupId) {
+          changes.push({ kind: 'expense', id: expense.id, change: 'removed', label: expense.description });
+        }
+      }
+      for (const settlement of ledger.settlements) {
+        if (settlement.groupId === groupId) {
+          changes.push({ kind: 'settlement', id: settlement.id, change: 'removed', label: 'Settlement' });
+        }
+      }
+    }
+    const others = (ledger.tombstones ?? []).filter((tomb) => tomb.groupId !== groupId);
+    return {
+      ledger: {
+        ...ledger,
+        groups: ledger.groups.filter((group) => group.id !== groupId),
+        expenses: ledger.expenses.filter((expense) => expense.groupId !== groupId),
+        settlements: ledger.settlements.filter((settlement) => settlement.groupId !== groupId),
+        tombstones: [...others, ...tombs.values()],
+      },
+      preview: finishPreview(changes),
+    };
+  };
+
+  if (groupDeleted || !chosenGroup) return dropGroup();
+
+  const peopleChanges: ImportChange[] = [];
+  const localPeople = localGroup?.people ?? [];
+  const filePeople = incomingGroup?.people ?? [];
+  const peopleIds = [...new Set([...localPeople.map((person) => person.id), ...filePeople.map((person) => person.id)])].sort(
+    cmp,
+  );
+  const mergedPeople: Person[] = [];
+  for (const id of peopleIds) {
+    const local = localPeople.find((person) => person.id === id) ?? null;
+    const incoming = filePeople.find((person) => person.id === id) ?? null;
+    const chosen = chooseLive(local ? localPersonLive(local) : null, incoming ? filePersonLive(incoming) : null);
+    const tomb = tombs.get(tombKey('person', id)) ?? null;
+    if (!chosen || (tomb && newer(tomb, chosen.live.stamp))) {
+      if (local) peopleChanges.push({ kind: 'person', id, change: 'removed', label: local.name });
+      continue;
+    }
+    if (!local) peopleChanges.push({ kind: 'person', id, change: 'new', label: chosen.live.label });
+    else if (chosen.source === 'incoming' && chosen.live.content !== personContent(local)) {
+      peopleChanges.push({ kind: 'person', id, change: 'updated', label: chosen.live.label });
+    }
+    const person = chosen.live.value;
+    person.updatedAt = chosen.live.stamp.updatedAt;
+    person.deviceId = chosen.live.stamp.deviceId;
+    mergedPeople.push(person);
+  }
+
+  const expenseChanges: ImportChange[] = [];
+  const mergedExpenses = mergeRecords(
+    ledger.expenses.filter((expense) => expense.groupId === groupId),
+    file.expenses,
+    tombs,
+    'expense',
+    (expense) => expense.id,
+    (expense) => ({
+      value: copyExpense(expense),
+      stamp: localStamp(expense),
+      content: expenseContent(expense),
+      label: expense.description,
+    }),
+    (expense) => ({
+      value: expenseFromFile(expense),
+      stamp: { updatedAt: expense.updatedAt, deviceId: expense.deviceId },
+      content: expenseContent(expense),
+      label: expense.description,
+    }),
+    (chosen) => {
+      const expense = chosen.value;
+      expense.updatedAt = chosen.stamp.updatedAt;
+      expense.deviceId = chosen.stamp.deviceId;
+      return expense;
+    },
+    expenseChanges,
+  );
+
+  const settlementChanges: ImportChange[] = [];
+  const mergedSettlements = mergeRecords(
+    ledger.settlements.filter((settlement) => settlement.groupId === groupId),
+    file.settlements,
+    tombs,
+    'settlement',
+    (settlement) => settlement.id,
+    (settlement) => ({
+      value: copySettlement(settlement),
+      stamp: localStamp(settlement),
+      content: settlementContent(settlement),
+      label: 'Settlement',
+    }),
+    (settlement) => ({
+      value: settlementFromFile(settlement),
+      stamp: { updatedAt: settlement.updatedAt, deviceId: settlement.deviceId },
+      content: settlementContent(settlement),
+      label: 'Settlement',
+    }),
+    (chosen) => {
+      const settlement = chosen.value;
+      settlement.updatedAt = chosen.stamp.updatedAt;
+      settlement.deviceId = chosen.stamp.deviceId;
+      return settlement;
+    },
+    settlementChanges,
+  );
+
+  const groupStamp = chosenGroup.live.stamp;
+  const groupSource = chosenGroup.source === 'incoming' && incomingGroup ? incomingGroup : null;
+  const base = groupSource
+    ? {
+        id: groupId,
+        name: groupSource.name,
+        currency: groupSource.currency,
+        createdAt: groupSource.createdAt,
+        updatedAt: groupStamp.updatedAt,
+        deviceId: groupStamp.deviceId,
+      }
+    : {
+        id: localGroup!.id,
+        name: localGroup!.name,
+        currency: localGroup!.currency,
+        createdAt: localGroup!.createdAt,
+        updatedAt: groupStamp.updatedAt,
+        deviceId: groupStamp.deviceId,
+      };
+  if (!localGroup) changes.push({ kind: 'group', id: groupId, change: 'new', label: base.name });
+  else if (chosenGroup.source === 'incoming' && chosenGroup.live.content !== groupContent(localGroup)) {
+    changes.push({ kind: 'group', id: groupId, change: 'updated', label: base.name });
+  }
+  changes.push(...peopleChanges, ...expenseChanges, ...settlementChanges);
+
+  const survivors: { kind: TombstoneKind; id: string; stamp: SyncStamp }[] = [
+    { kind: 'group', id: groupId, stamp: groupStamp },
+    ...mergedPeople.map((person) => ({
+      kind: 'person' as const,
+      id: person.id,
+      stamp: { updatedAt: person.updatedAt ?? 0, deviceId: person.deviceId ?? '' },
+    })),
+    ...mergedExpenses.map((expense) => ({
+      kind: 'expense' as const,
+      id: expense.id,
+      stamp: { updatedAt: expense.updatedAt ?? 0, deviceId: expense.deviceId ?? '' },
+    })),
+    ...mergedSettlements.map((settlement) => ({
+      kind: 'settlement' as const,
+      id: settlement.id,
+      stamp: { updatedAt: settlement.updatedAt ?? 0, deviceId: settlement.deviceId ?? '' },
+    })),
+  ];
+  const keptTombs: Tombstone[] = [];
+  for (const tomb of tombs.values()) {
+    const live = survivors.find((entry) => entry.kind === tomb.kind && entry.id === tomb.id);
+    if (live && !newer(tomb, live.stamp)) continue;
+    keptTombs.push(tomb);
+  }
+  const nextGroup: SplitGroup = {
+    ...base,
+    people: orderPeople(mergedPeople, localPeople),
+  };
+  const groups = localGroup
+    ? ledger.groups.map((group) => (group.id === groupId ? nextGroup : group))
+    : [...ledger.groups, nextGroup];
+  return {
+    ledger: {
+      ...ledger,
+      groups,
+      expenses: spliceByGroup(ledger.expenses, groupId, mergedExpenses),
+      settlements: spliceByGroup(ledger.settlements, groupId, mergedSettlements),
+      tombstones: [...(ledger.tombstones ?? []).filter((tomb) => tomb.groupId !== groupId), ...keptTombs],
+    },
+    preview: finishPreview(changes),
+  };
+}
+
+function finishPreview(changes: ImportChange[]): ImportPreview {
+  const added = changes.filter((change) => change.change === 'new').length;
+  const updated = changes.filter((change) => change.change === 'updated').length;
+  const removed = changes.filter((change) => change.change === 'removed').length;
+  return { ok: true, added, updated, removed, summary: countSummary(added, updated, removed), changes };
+}
+
+function spliceByGroup<T extends { id: string; groupId: string }>(all: T[], groupId: string, merged: T[]): T[] {
+  const byId = new Map(merged.map((entry) => [entry.id, entry]));
+  const used = new Set<string>();
+  const next: T[] = [];
+  for (const entry of all) {
+    if (entry.groupId !== groupId) {
+      next.push(entry);
+      continue;
+    }
+    const found = byId.get(entry.id);
+    if (!found) continue;
+    next.push(found);
+    used.add(entry.id);
+  }
+  const added = merged.filter((entry) => !used.has(entry.id)).sort((a, b) => cmp(a.id, b.id));
+  return [...next, ...added];
+}
+
+function mergeRecords<TLocal extends { id: string }, TFile extends { id: string }, TOut>(
+  localRows: TLocal[],
+  fileRows: TFile[],
+  tombs: Map<string, Tombstone>,
+  kind: TombstoneKind,
+  idOfFile: (row: TFile) => string,
+  localLive: (row: TLocal) => Live<TOut>,
+  fileLive: (row: TFile) => Live<TOut>,
+  adopt: (live: Live<TOut>) => TOut,
+  changes: ImportChange[],
+): TOut[] {
+  const ids = [...new Set([...localRows.map((row) => row.id), ...fileRows.map((row) => idOfFile(row))])].sort(cmp);
+  const out: TOut[] = [];
+  for (const id of ids) {
+    const local = localRows.find((row) => row.id === id) ?? null;
+    const incoming = fileRows.find((row) => idOfFile(row) === id) ?? null;
+    const chosen = chooseLive(local ? localLive(local) : null, incoming ? fileLive(incoming) : null);
+    const tomb = tombs.get(tombKey(kind, id)) ?? null;
+    if (!chosen || (tomb && newer(tomb, chosen.live.stamp))) {
+      if (local) changes.push({ kind, id, change: 'removed', label: localLive(local).label });
+      continue;
+    }
+    if (!local) changes.push({ kind, id, change: 'new', label: chosen.live.label });
+    else if (chosen.source === 'incoming' && chosen.live.content !== localLive(local).content) {
+      changes.push({ kind, id, change: 'updated', label: chosen.live.label });
+    }
+    out.push(adopt(chosen.live));
+  }
+  return out;
+}
+
+export function previewGroupImport(ledger: SplitLedger, file: SplitGroupFile): ImportPreview {
+  return mergeGroupFile(ledger, file).preview;
+}
+
+export function applyGroupImport(
+  ledger: SplitLedger,
+  file: SplitGroupFile,
+): { ok: true; ledger: SplitLedger; preview: ImportPreview } | { ok: false; ledger: SplitLedger; error: string } {
+  const merged = mergeGroupFile(ledger, file);
+  return { ok: true, ledger: merged.ledger, preview: merged.preview };
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function asInt(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) ? value : null;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+function asStamp(record: Record<string, unknown>): SyncStamp | null {
+  const updatedAt = asInt(record.updatedAt);
+  const deviceId = asString(record.deviceId);
+  if (updatedAt === null || !deviceId) return null;
+  return { updatedAt, deviceId };
+}
+
+export function parseGroupFile(text: string): { ok: true; file: SplitGroupFile } | { ok: false; error: string } {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { ok: false, error: 'This file is not an Everytool split group.' };
+  }
+  const root = asObject(raw);
+  if (!root) return { ok: false, error: 'This file is not an Everytool split group.' };
+  const schema = asInt(root.schema);
+  if (schema !== null && schema > SPLIT_FILE_SCHEMA) {
+    return { ok: false, error: 'This split file is from a newer Everytool. Update the app to open it.' };
+  }
+  if (schema !== SPLIT_FILE_SCHEMA || root.kind !== SPLIT_FILE_KIND) {
+    return { ok: false, error: 'This file is not an Everytool split group.' };
+  }
+  const groupId = asString(root.groupId);
+  const deviceId = asString(root.deviceId);
+  const exportedAt = asInt(root.exportedAt);
+  if (!groupId || !deviceId || exportedAt === null) {
+    return { ok: false, error: 'This file is not an Everytool split group.' };
+  }
+  const group = parseFileGroup(root.group, groupId);
+  if (!group.ok) return group;
+  const expenses = parseFileExpenses(root.expenses, groupId);
+  if (!expenses.ok) return expenses;
+  const settlements = parseFileSettlements(root.settlements, groupId);
+  if (!settlements.ok) return settlements;
+  const tombstones = parseTombstones(root.tombstones, groupId);
+  if (!tombstones.ok) return tombstones;
+  if (!group.group && !tombstones.tombstones.some((tomb) => tomb.kind === 'group' && tomb.id === groupId)) {
+    return { ok: false, error: 'This file is not an Everytool split group.' };
+  }
+  return {
+    ok: true,
+    file: {
+      schema: SPLIT_FILE_SCHEMA,
+      kind: SPLIT_FILE_KIND,
+      extension: SPLIT_FILE_EXTENSION,
+      deviceId,
+      exportedAt,
+      groupId,
+      group: group.group,
+      expenses: expenses.expenses,
+      settlements: settlements.settlements,
+      tombstones: tombstones.tombstones,
+    },
+  };
+}
+
+function parseFileGroup(
+  value: unknown,
+  groupId: string,
+): { ok: true; group: SplitFileGroup | null } | { ok: false; error: string } {
+  if (value === null) return { ok: true, group: null };
+  const record = asObject(value);
+  if (!record || record.id !== groupId) return { ok: false, error: 'This file is not an Everytool split group.' };
+  const name = typeof record.name === 'string' ? clip(record.name, 40, 'Group') : null;
+  const currency = typeof record.currency === 'string' && isCurrency(record.currency) ? record.currency : null;
+  const createdAt = asInt(record.createdAt);
+  const stampValue = asStamp(record);
+  if (!name || !currency || createdAt === null || !stampValue) {
+    return { ok: false, error: 'This file is not an Everytool split group.' };
+  }
+  if (!Array.isArray(record.people)) return { ok: false, error: 'This file is not an Everytool split group.' };
+  const people: SplitFilePerson[] = [];
+  const seen = new Set<string>();
+  for (const entry of record.people) {
+    const person = asObject(entry);
+    if (!person) return { ok: false, error: 'This file is not an Everytool split group.' };
+    const id = asString(person.id);
+    const personName = typeof person.name === 'string' ? clip(person.name, 40, 'Person') : null;
+    const personStamp = asStamp(person);
+    if (!id || !personName || !personStamp || seen.has(id)) {
+      return { ok: false, error: 'This file is not an Everytool split group.' };
+    }
+    seen.add(id);
+    people.push({
+      id,
+      name: personName,
+      isYou: person.isYou === true,
+      updatedAt: personStamp.updatedAt,
+      deviceId: personStamp.deviceId,
+    });
+  }
+  return {
+    ok: true,
+    group: {
+      id: groupId,
+      name,
+      currency,
+      createdAt,
+      updatedAt: stampValue.updatedAt,
+      deviceId: stampValue.deviceId,
+      people,
+    },
+  };
+}
+
+function parseFileExpenses(
+  value: unknown,
+  groupId: string,
+): { ok: true; expenses: SplitFileExpense[] } | { ok: false; error: string } {
+  if (!Array.isArray(value)) return { ok: false, error: 'This file is not an Everytool split group.' };
+  const expenses: SplitFileExpense[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    const record = asObject(entry);
+    if (!record) return { ok: false, error: 'This file is not an Everytool split group.' };
+    const id = asString(record.id);
+    const description = typeof record.description === 'string' ? clip(record.description, 80, 'Expense') : null;
+    const amountCents = asInt(record.amountCents);
+    const currency = typeof record.currency === 'string' && isCurrency(record.currency) ? record.currency : null;
+    const createdAt = asInt(record.createdAt);
+    const stampValue = asStamp(record);
+    const split = asObject(record.split);
+    if (
+      !id ||
+      !description ||
+      amountCents === null ||
+      amountCents < 0 ||
+      !currency ||
+      createdAt === null ||
+      !stampValue ||
+      record.groupId !== groupId ||
+      seen.has(id) ||
+      !split ||
+      !isMethod(String(split.method)) ||
+      !Array.isArray(split.lines)
+    ) {
+      return { ok: false, error: 'This file is not an Everytool split group.' };
+    }
+    const lines: SplitLine[] = [];
+    for (const line of split.lines) {
+      const row = asObject(line);
+      const personId = row ? asString(row.personId) : null;
+      const lineValue = row ? asInt(row.value) : null;
+      if (!personId || lineValue === null) return { ok: false, error: 'This file is not an Everytool split group.' };
+      lines.push({ personId, value: lineValue });
+    }
+    if (!Array.isArray(record.payers)) return { ok: false, error: 'This file is not an Everytool split group.' };
+    const payers: Payer[] = [];
+    for (const payer of record.payers) {
+      const row = asObject(payer);
+      const personId = row ? asString(row.personId) : null;
+      const cents = row ? asInt(row.cents) : null;
+      if (!personId || cents === null || cents < 0) {
+        return { ok: false, error: 'This file is not an Everytool split group.' };
+      }
+      payers.push({ personId, cents });
+    }
+    let receipt: ReceiptSplit | undefined;
+    if (record.receipt !== undefined && record.receipt !== null) {
+      const parsed = parseReceiptSplit(record.receipt);
+      if (!parsed) return { ok: false, error: 'This file is not an Everytool split group.' };
+      receipt = parsed;
+    }
+    seen.add(id);
+    const expense: SplitFileExpense = {
+      id,
+      groupId,
+      description,
+      amountCents,
+      currency,
+      payers,
+      split: { method: split.method as SplitMethod, lines },
+      createdAt,
+      updatedAt: stampValue.updatedAt,
+      deviceId: stampValue.deviceId,
+    };
+    if (receipt) expense.receipt = receipt;
+    expenses.push(expense);
+  }
+  return { ok: true, expenses };
+}
+
+function parseReceiptSplit(value: unknown): ReceiptSplit | null {
+  const record = asObject(value);
+  if (!record || !Array.isArray(record.items) || !Array.isArray(record.everyoneIds)) return null;
+  const tax = parseCharge(record.tax);
+  const tip = parseCharge(record.tip);
+  if (!tax || !tip) return null;
+  const items: ReceiptItem[] = [];
+  for (const entry of record.items) {
+    const item = asObject(entry);
+    if (!item) return null;
+    const id = asString(item.id);
+    const name = typeof item.name === 'string' ? clip(item.name, 80, 'Item') : null;
+    const cents = asInt(item.cents);
+    if (!id || !name || cents === null || cents < 0 || !Array.isArray(item.personIds)) return null;
+    const personIds: string[] = [];
+    for (const personId of item.personIds) {
+      if (typeof personId !== 'string' || !personId) return null;
+      personIds.push(personId);
+    }
+    items.push({ id, name, cents, personIds });
+  }
+  const everyoneIds: string[] = [];
+  for (const personId of record.everyoneIds) {
+    if (typeof personId !== 'string' || !personId) return null;
+    everyoneIds.push(personId);
+  }
+  return { items, tax, tip, everyoneIds };
+}
+
+function parseCharge(value: unknown): Charge | null {
+  const record = asObject(value);
+  if (!record) return null;
+  const amount = asInt(record.value);
+  if (amount === null || amount < 0) return null;
+  if (record.kind !== 'percent' && record.kind !== 'amount') return null;
+  return { kind: record.kind, value: amount };
+}
+
+function parseFileSettlements(
+  value: unknown,
+  groupId: string,
+): { ok: true; settlements: SplitFileSettlement[] } | { ok: false; error: string } {
+  if (!Array.isArray(value)) return { ok: false, error: 'This file is not an Everytool split group.' };
+  const settlements: SplitFileSettlement[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    const record = asObject(entry);
+    if (!record) return { ok: false, error: 'This file is not an Everytool split group.' };
+    const id = asString(record.id);
+    const fromId = asString(record.fromId);
+    const toId = asString(record.toId);
+    const cents = asInt(record.cents);
+    const currency = typeof record.currency === 'string' && isCurrency(record.currency) ? record.currency : null;
+    const createdAt = asInt(record.createdAt);
+    const stampValue = asStamp(record);
+    if (
+      !id ||
+      !fromId ||
+      !toId ||
+      fromId === toId ||
+      cents === null ||
+      cents <= 0 ||
+      !currency ||
+      createdAt === null ||
+      !stampValue ||
+      record.groupId !== groupId ||
+      seen.has(id)
+    ) {
+      return { ok: false, error: 'This file is not an Everytool split group.' };
+    }
+    seen.add(id);
+    settlements.push({
+      id,
+      groupId,
+      fromId,
+      toId,
+      cents,
+      currency,
+      createdAt,
+      updatedAt: stampValue.updatedAt,
+      deviceId: stampValue.deviceId,
+    });
+  }
+  return { ok: true, settlements };
+}
+
+function parseTombstones(
+  value: unknown,
+  groupId: string,
+): { ok: true; tombstones: Tombstone[] } | { ok: false; error: string } {
+  if (!Array.isArray(value)) return { ok: false, error: 'This file is not an Everytool split group.' };
+  const tombstones: Tombstone[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    const record = asObject(entry);
+    if (!record) return { ok: false, error: 'This file is not an Everytool split group.' };
+    const id = asString(record.id);
+    const stampValue = asStamp(record);
+    const kind = record.kind;
+    if (
+      !id ||
+      !stampValue ||
+      record.groupId !== groupId ||
+      (kind !== 'group' && kind !== 'person' && kind !== 'expense' && kind !== 'settlement')
+    ) {
+      return { ok: false, error: 'This file is not an Everytool split group.' };
+    }
+    const key = tombKey(kind, id);
+    if (seen.has(key)) return { ok: false, error: 'This file is not an Everytool split group.' };
+    seen.add(key);
+    tombstones.push({ id, groupId, kind, updatedAt: stampValue.updatedAt, deviceId: stampValue.deviceId });
+  }
+  return { ok: true, tombstones };
+}
+
+function filePeople(people: Person[], fallback: SyncStamp): SplitFilePerson[] {
+  return people.map((person) => {
+    const stampValue = publishStamp(person, fallback);
+    return {
+      id: person.id,
+      name: person.name,
+      isYou: person.isYou === true,
+      updatedAt: stampValue.updatedAt,
+      deviceId: stampValue.deviceId,
+    };
+  });
+}
+
+function fileExpense(expense: Expense, fallback: SyncStamp): SplitFileExpense {
+  const stampValue = publishStamp(expense, fallback);
+  const next: SplitFileExpense = {
+    id: expense.id,
+    groupId: expense.groupId,
+    description: expense.description,
+    amountCents: expense.amountCents,
+    currency: expense.currency,
+    payers: expense.payers.map((payer) => ({ personId: payer.personId, cents: payer.cents })),
+    split: {
+      method: expense.split.method,
+      lines: expense.split.lines.map((line) => ({ personId: line.personId, value: line.value })),
+    },
+    createdAt: expense.createdAt,
+    updatedAt: stampValue.updatedAt,
+    deviceId: stampValue.deviceId,
+  };
+  if (expense.receipt) next.receipt = copyReceipt(expense.receipt);
+  return next;
+}
+
+function fileSettlement(settlement: Settlement, fallback: SyncStamp): SplitFileSettlement {
+  const stampValue = publishStamp(settlement, fallback);
+  return {
+    id: settlement.id,
+    groupId: settlement.groupId,
+    fromId: settlement.fromId,
+    toId: settlement.toId,
+    cents: settlement.cents,
+    currency: settlement.currency,
+    createdAt: settlement.createdAt,
+    updatedAt: stampValue.updatedAt,
+    deviceId: stampValue.deviceId,
+  };
+}
+
+export function exportGroupFile(
+  ledger: SplitLedger,
+  groupId: string,
+  meta: { deviceId: string; exportedAt: number },
+): { ok: true; text: string; fileName: string } | { ok: false; error: string } {
+  if (!meta.deviceId || !Number.isInteger(meta.exportedAt)) {
+    return { ok: false, error: 'Missing stamp' };
+  }
+  const group = ledger.groups.find((entry) => entry.id === groupId) ?? null;
+  const tombs = (ledger.tombstones ?? []).filter((tomb) => tomb.groupId === groupId);
+  if (!group && tombs.length === 0) return { ok: false, error: 'Group not found' };
+  const fallback: SyncStamp = { updatedAt: meta.exportedAt, deviceId: meta.deviceId };
+  const people = group
+    ? filePeople(
+        [...group.people].sort((a, b) => {
+          if (a.isYou === b.isYou) return cmp(a.id, b.id);
+          return a.isYou ? -1 : 1;
+        }),
+        fallback,
+      )
+    : [];
+  const groupStamp = group ? publishStamp(group, fallback) : null;
+  const file: SplitGroupFile = {
+    schema: SPLIT_FILE_SCHEMA,
+    kind: SPLIT_FILE_KIND,
+    extension: SPLIT_FILE_EXTENSION,
+    deviceId: meta.deviceId,
+    exportedAt: meta.exportedAt,
+    groupId,
+    group: group
+      ? {
+          id: group.id,
+          name: group.name,
+          currency: group.currency,
+          createdAt: group.createdAt,
+          updatedAt: groupStamp!.updatedAt,
+          deviceId: groupStamp!.deviceId,
+          people,
+        }
+      : null,
+    expenses: group
+      ? ledger.expenses
+          .filter((expense) => expense.groupId === groupId)
+          .sort((a, b) => cmp(a.id, b.id))
+          .map((expense) => fileExpense(expense, fallback))
+      : [],
+    settlements: group
+      ? ledger.settlements
+          .filter((settlement) => settlement.groupId === groupId)
+          .sort((a, b) => cmp(a.id, b.id))
+          .map((settlement) => fileSettlement(settlement, fallback))
+      : [],
+    tombstones: [...tombs].sort((a, b) => cmp(a.kind, b.kind) || cmp(a.id, b.id)),
+  };
+  return {
+    ok: true,
+    text: JSON.stringify(file),
+    fileName: fileNameForGroup(group?.name ?? 'Group'),
+  };
+}
+
+export function serializeLedger(ledger: SplitLedger): string {
+  return JSON.stringify({
+    schema: SPLIT_FILE_SCHEMA,
+    deviceId: ledger.deviceId ?? '',
+    groups: ledger.groups,
+    expenses: ledger.expenses,
+    settlements: ledger.settlements,
+    tombstones: ledger.tombstones ?? [],
+  });
+}
+
+export function parseStoredLedger(
+  text: string | null,
+): { ok: true; ledger: SplitLedger } | { ok: false; error: string } {
+  if (text == null || text.trim() === '') return { ok: true, ledger: emptyLedger() };
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { ok: false, error: 'The split groups on this phone could not be read.' };
+  }
+  const root = asObject(raw);
+  if (!root) return { ok: false, error: 'The split groups on this phone could not be read.' };
+  const schema = asInt(root.schema);
+  if (schema !== null && schema > SPLIT_FILE_SCHEMA) {
+    return { ok: false, error: 'These split groups are from a newer Everytool. Update the app before importing.' };
+  }
+  if (!Array.isArray(root.groups) || !Array.isArray(root.expenses) || !Array.isArray(root.settlements)) {
+    return { ok: false, error: 'The split groups on this phone could not be read.' };
+  }
+  const ledger: SplitLedger = {
+    groups: root.groups as SplitGroup[],
+    expenses: root.expenses as Expense[],
+    settlements: root.settlements as Settlement[],
+    tombstones: Array.isArray(root.tombstones) ? (root.tombstones as Tombstone[]) : [],
+  };
+  if (typeof root.deviceId === 'string' && root.deviceId) ledger.deviceId = root.deviceId;
+  return { ok: true, ledger };
+}
+
+function totalLine(row: PersonBalance): string {
+  const money = formatCents(Math.abs(row.netCents), row.currency);
+  if (row.netCents > 0) return row.isYou ? `You are owed ${money}` : `${row.name} is owed ${money}`;
+  if (row.netCents < 0) return row.isYou ? `You owe ${money}` : `${row.name} owes ${money}`;
+  return row.isYou ? 'You are settled' : `${row.name} is settled`;
+}
+
+/** Who owes whom, plus one total per person. Plain text for the share sheet. */
+export function groupSummary(ledger: SplitLedger, groupId: string): SummaryShare | null {
+  const group = ledger.groups.find((entry) => entry.id === groupId);
+  if (!group) return null;
+  const owe = whoOwesWhom(ledger, groupId);
+  const oweLines = owe.lines.length > 0 ? owe.lines.map((line) => line.text) : ['Everyone is settled up.'];
+  const totals: SummaryTotal[] = balances(ledger, groupId).map((row) => ({
+    name: row.isYou ? 'You' : row.name,
+    text: totalLine(row),
+    tone: row.netCents > 0 ? 'owed' : row.netCents < 0 ? 'owes' : 'settled',
+    netCents: row.netCents,
+    currency: row.currency,
+  }));
+  return {
+    title: group.name,
+    oweLines,
+    totals,
+    text: [group.name, 'Who owes whom', ...oweLines, '', 'Totals', ...totals.map((row) => row.text)].join('\n'),
   };
 }
 

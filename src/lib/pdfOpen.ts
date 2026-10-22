@@ -68,7 +68,17 @@ export interface ConvertDocumentRoute {
   name: string;
 }
 
-export type IncomingRoute = PdfDocumentRoute | ConvertDocumentRoute | ToolLinkRoute | { kind: 'ignore' };
+/** Group file extension. The UTI lives in Info.plist; this only routes the URL. */
+export const SPLIT_OPEN_EXTENSION = 'etsplit';
+
+export interface SplitDocumentRoute {
+  kind: 'split';
+  tool: 'split';
+  screen: 'import';
+  name: string;
+}
+
+export type IncomingRoute = PdfDocumentRoute | ConvertDocumentRoute | SplitDocumentRoute | ToolLinkRoute | { kind: 'ignore' };
 
 export interface ShareInboxItem {
   kind: string;
@@ -159,6 +169,19 @@ export function isConvertOpenFileUrl(raw: string): boolean {
   return (CONVERT_OPEN_EXTENSIONS as readonly string[]).includes(fileExtension(raw));
 }
 
+/** An Everytool split group (.etsplit) opened from AirDrop, Messages, WhatsApp, or Files. */
+export function isSplitFileUrl(raw: string): boolean {
+  return fileExtension(raw) === SPLIT_OPEN_EXTENSION;
+}
+
+export function splitDisplayName(raw: string): string {
+  const url = parsed(raw);
+  const segment = url ? lastSegment(url) : '';
+  const base = segment.replace(/[\\/:*?"<>|]/g, '').trim();
+  if (!base) return 'group.etsplit';
+  return /\.etsplit$/i.test(base) ? base : `${base}.etsplit`;
+}
+
 export function convertDisplayName(raw: string): string {
   const url = parsed(raw);
   const segment = url ? lastSegment(url) : '';
@@ -185,6 +208,9 @@ export function sandboxConvertFileName(displayName: string, unique: string): str
  * share extension uses one of those after it has copied the file into the inbox.
  */
 export function routeIncomingUrl(raw: string): IncomingRoute {
+  if (isSplitFileUrl(raw)) {
+    return { kind: 'split', tool: 'split', screen: 'import', name: splitDisplayName(raw) };
+  }
   if (isPdfFileUrl(raw)) {
     return { kind: 'pdf', tool: 'pdf', screen: PDF_OPEN_SCREEN, name: pdfDisplayName(raw) };
   }
