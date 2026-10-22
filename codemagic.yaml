@@ -647,10 +647,10 @@ workflows:
           set -euo pipefail
           # Recreate the key in this step. Do not print it. Do not also
           # declare a top-level publishing: block — that would upload twice.
-          # `--testflight` submits the uploaded build for TestFlight.
-          # Apple has to finish processing first; these waits fit inside
-          # max_build_duration. External beta review also needs the beta
-          # contact info already saved on the app in App Store Connect.
+          # Uploads only: the build lands in App Store Connect for internal
+          # TestFlight testing. External beta review is intentionally skipped.
+          # To enable it later, fill in TestFlight Test Information in App
+          # Store Connect and re-add --testflight to the command below.
           TMP_DIR="$CM_BUILD_DIR/build/tmp"
           mkdir -p "$TMP_DIR" "$HOME/.appstoreconnect/private_keys" build/logs
           KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
@@ -658,9 +658,6 @@ workflows:
           chmod 600 "$KEY_PATH"
           if ! app-store-connect publish \
             --path "$IPA_PATH" \
-            --testflight \
-            --max-find-build-wait 20 \
-            --max-build-processing-wait 40 \
             --no-color \
             --issuer-id "@env:ASC_ISSUER_ID" \
             --key-id "@env:ASC_KEY_ID" \
