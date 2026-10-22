@@ -13,7 +13,8 @@ import { AppState as RNAppState } from 'react-native';
 
 import * as ops from '../lib/clips';
 import { addCountdown as addCd, deleteCountdown as delCd } from '../lib/countdowns';
-import { type AppState, type Clip, type QrHistoryItem, emptyState } from '../types';
+import { deleteQrHistoryItem, saveQrHistory, type QrSaveInput } from '../lib/qrHistory';
+import { type AppState, type Clip, emptyState } from '../types';
 import { parseState, readSharedState, reloadWidgets, writeSharedState } from './sharedVault';
 
 const KEY = 'everytool.state.v1';
@@ -30,7 +31,7 @@ interface StoreApi {
   togglePin: (id: string) => void;
   deleteClip: (id: string) => void;
   clearUnpinnedClips: () => void;
-  addQrHistory: (item: Omit<QrHistoryItem, 'id' | 'createdAt'>) => void;
+  addQrHistory: (item: QrSaveInput) => void;
   deleteQrHistory: (id: string) => void;
   clearQrHistory: () => void;
   /** Re-read the App Group (the keyboard may have changed clips). */
@@ -162,18 +163,9 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       deleteClip: (id) => commit((s) => ops.deleteClip(s, id)),
       clearUnpinnedClips: () => commit((s) => ops.clearUnpinned(s)),
       addQrHistory: (item) =>
-        commit((s) => ({
-          ...s,
-          qrHistory: [
-            { ...item, id: ops.newClipId(), createdAt: Date.now() },
-            ...s.qrHistory,
-          ].slice(0, 100),
-        })),
+        commit((s) => ({ ...s, qrHistory: saveQrHistory(s.qrHistory, item).items })),
       deleteQrHistory: (id) =>
-        commit((s) => ({
-          ...s,
-          qrHistory: s.qrHistory.filter((q) => q.id !== id),
-        })),
+        commit((s) => ({ ...s, qrHistory: deleteQrHistoryItem(s.qrHistory, id) })),
       clearQrHistory: () => commit((s) => ({ ...s, qrHistory: [] })),
     }),
     [ready, state, refresh, commit],

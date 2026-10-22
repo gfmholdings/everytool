@@ -2,16 +2,32 @@ import { CameraView, scanFromURLAsync, useCameraPermissions } from 'expo-camera'
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { File } from 'expo-file-system';
-import { useEffect, useRef, useState } from 'react';
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  Alert,
+  Animated,
+  Linking,
+  PanResponder,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 
 import { Card, Field, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
 import { saveToPhotos, shareFile, tempFileUri } from '../lib/files';
 import { checkLink } from '../lib/linkCheck';
+import {
+  DEFAULT_QR_STYLE,
+  formatQrDate,
+  qrContentPreview,
+  qrTypeLabel,
+} from '../lib/qrHistory';
 import { describePayload, wifiPayload, contactPayload, type WifiSecurity } from '../lib/qrpayload';
 import { useStore } from '../store/AppStore';
 import { colors, type } from '../theme';
+import type { QrHistoryItem, QrStyle } from '../types';
 
 type Tab = 'make' | 'scan' | 'history';
 type Kind = 'text' | 'wifi' | 'contact';
@@ -37,23 +53,8 @@ export function QrScreen({
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [made, setMade] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const qrRef = useRef<{ toDataURL: (cb: (b64: string) => void) => void } | null>(null);
-
-  /** Render the shown QR to a PNG file (white margin, 1024 px). */
-  const qrFile = (): Promise<string | null> =>
-    new Promise((resolve) => {
-      const svg = qrRef.current;
-      if (!svg) return resolve(null);
-      svg.toDataURL((b64) => {
-        try {
-          const uri = tempFileUri('png', 'qr');
-          new File(uri).write(b64, { encoding: 'base64' });
-          resolve(uri);
-        } catch {
-          resolve(null);
-        }
-      });
-    });
 
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = useState(false);
@@ -74,13 +75,8 @@ export function QrScreen({
     setMade(payload);
     addQrHistory({
       direction: 'made',
-      kind:
-        kind === 'wifi'
-          ? 'Wi-Fi network'
-          : kind === 'contact'
-            ? 'Contact'
-            : describePayload(payload),
       payload,
+      style: DEFAULT_QR_STYLE,
     });
   };
 
@@ -192,45 +188,21 @@ export function QrScreen({
           <PrimaryButton label="Make QR code" onPress={make} disabled={!buildPayload()} />
           {made && (
             <Card style={styles.qrCard}>
-              <QRCode
+              <QrMark
                 value={made}
+                qrStyle={DEFAULT_QR_STYLE}
                 size={220}
                 quietZone={16}
-                getRef={(c: { toDataURL: (cb: (b64: string) => void) => void } | null) => {
-                  qrRef.current = c;
-                }}
+                qrRef={qrRef}
               />
               <Text style={[type.small, styles.center]} numberOfLines={2}>
                 {made}
               </Text>
-              <View style={styles.qrActions}>
-                <View style={styles.half}>
-                  <PrimaryButton
-                    label="Share"
-                    onPress={async () => {
-                      const uri = await qrFile();
-                      if (uri) await shareFile(uri, 'image/png');
-                      else notify('Couldn’t render the QR code');
-                    }}
-                  />
-                </View>
-                <View style={styles.half}>
-                  <GhostButton
-                    label="Save to Photos"
-                    onPress={async () => {
-                      const uri = await qrFile();
-                      if (!uri) return notify('Couldn’t render the QR code');
-                      const problem = await saveToPhotos(uri);
-                      notify(problem ?? 'Saved to Photos');
-                    }}
-                  />
-                </View>
-              </View>
-              <GhostButton
-                label="Copy text"
-                onPress={() =>
-                  void Clipboard.setStringAsync(made).then(() => notify('Copied'))
-                }
+              <QrFileActions
+                notify={notify}
+                copyLabel="Copy text"
+                onCopy={() => void Clipboard.setStringAsync(made).then(() => notify('Copied'))}
+                file={() => qrFileFrom(qrRef.current)}
               />
             </Card>
           )}
@@ -318,45 +290,246 @@ export function QrScreen({
       )}
 
       {tab === 'history' && (
-        <>
-          {state.qrHistory.length === 0 ? (
-            <Text style={type.small}>Nothing made or scanned yet.</Text>
-          ) : (
-            state.qrHistory.map((item) => (
-              <Pressable
-                key={item.id}
-                onPress={() => {
-                  void Clipboard.setStringAsync(item.payload).then(() =>
-                    notify('Copied'),
-                  );
-                }}
-              >
-                <Card style={styles.historyRow}>
-                  <View style={styles.historyMain}>
-                    <Text style={type.body} numberOfLines={1}>
-                      {item.kind} · {item.direction}
-                    </Text>
-                    <Text style={type.small} numberOfLines={1}>
-                      {item.payload}
-                    </Text>
-                  </View>
-                  <Pressable
-                    accessibilityLabel="Delete"
-                    onPress={() => deleteQrHistory(item.id)}
-                    style={styles.iconButton}
-                  >
-                    <Text style={styles.deleteGlyph}>✕</Text>
-                  </Pressable>
-                </Card>
-              </Pressable>
-            ))
-          )}
-          {state.qrHistory.length > 0 && (
-            <GhostButton label="Clear history" onPress={clearQrHistory} />
-          )}
-        </>
+        <QrHistoryList
+          items={[...state.qrHistory].sort((a, b) => b.createdAt - a.createdAt)}
+          openId={openId}
+          qrRef={qrRef}
+          notify={notify}
+          onOpen={setOpenId}
+          onDelete={(id) => {
+            deleteQrHistory(id);
+            if (openId === id) setOpenId(null);
+          }}
+          onClear={() => {
+            Alert.alert(
+              'Clear all QR codes?',
+              'This removes every saved code from this phone. It can’t be undone.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Clear all',
+                  style: 'destructive',
+                  onPress: () => {
+                    clearQrHistory();
+                    setOpenId(null);
+                    notify('Cleared');
+                  },
+                },
+              ],
+            );
+          }}
+        />
       )}
     </ToolShell>
+  );
+}
+
+function QrHistoryList({
+  items,
+  openId,
+  qrRef,
+  notify,
+  onOpen,
+  onDelete,
+  onClear,
+}: {
+  items: QrHistoryItem[];
+  openId: string | null;
+  qrRef: { current: { toDataURL: (cb: (b64: string) => void) => void } | null };
+  notify: (msg: string) => void;
+  onOpen: (id: string | null) => void;
+  onDelete: (id: string) => void;
+  onClear: () => void;
+}) {
+  const open = items.find((item) => item.id === openId) ?? null;
+  if (open) {
+    return (
+      <Card style={styles.qrCard}>
+        <Text style={type.body}>
+          {qrTypeLabel(open.type)} · {open.direction}
+        </Text>
+        <QrMark value={open.payload} qrStyle={open.style} size={220} quietZone={16} qrRef={qrRef} />
+        <Text style={[type.body, styles.center]} selectable>
+          {qrContentPreview(open.payload)}
+        </Text>
+        <Text style={type.small}>{formatQrDate(open.createdAt)}</Text>
+        <QrFileActions
+          notify={notify}
+          copyLabel="Copy"
+          onCopy={() => void Clipboard.setStringAsync(open.payload).then(() => notify('Copied'))}
+          file={() => qrFileFrom(qrRef.current)}
+        />
+        <GhostButton label="Back to history" onPress={() => onOpen(null)} />
+      </Card>
+    );
+  }
+  if (items.length === 0) {
+    return (
+      <Card style={styles.empty}>
+        <Text style={type.h2}>No QR codes yet</Text>
+        <Text style={type.small}>
+          Codes you make are kept on this phone, newest first. Nothing leaves the device.
+        </Text>
+      </Card>
+    );
+  }
+  return (
+    <>
+      {items.map((item) => (
+        <SwipeRow key={item.id} onDelete={() => onDelete(item.id)}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`${qrTypeLabel(item.type)}, ${item.direction}, ${qrContentPreview(item.payload)}`}
+            accessibilityHint="Opens the QR code"
+            onPress={() => onOpen(item.id)}
+          >
+            <Card style={styles.historyRow}>
+              <View style={styles.thumb}>
+                <QrMark value={item.payload} qrStyle={item.style} size={48} quietZone={2} />
+              </View>
+              <View style={styles.historyMain}>
+                <Text style={type.body} numberOfLines={1}>
+                  {qrTypeLabel(item.type)} · {item.direction}
+                </Text>
+                <Text style={type.small} numberOfLines={1}>
+                  {qrContentPreview(item.payload)}
+                </Text>
+                <Text style={type.small}>{formatQrDate(item.createdAt)}</Text>
+              </View>
+            </Card>
+          </Pressable>
+        </SwipeRow>
+      ))}
+      <GhostButton label="Clear all" onPress={onClear} />
+    </>
+  );
+}
+
+function QrMark({
+  value,
+  qrStyle,
+  size,
+  quietZone,
+  qrRef,
+}: {
+  value: string;
+  qrStyle: QrStyle;
+  size: number;
+  quietZone: number;
+  qrRef?: { current: { toDataURL: (cb: (b64: string) => void) => void } | null };
+}) {
+  return (
+    <QRCode
+      value={value}
+      size={size}
+      quietZone={quietZone}
+      color={qrStyle.foreground}
+      backgroundColor={qrStyle.background}
+      getRef={
+        qrRef
+          ? (c: { toDataURL: (cb: (b64: string) => void) => void } | null) => {
+              qrRef.current = c;
+            }
+          : undefined
+      }
+    />
+  );
+}
+
+function QrFileActions({
+  notify,
+  copyLabel,
+  onCopy,
+  file,
+}: {
+  notify: (msg: string) => void;
+  copyLabel: string;
+  onCopy: () => void;
+  file: () => Promise<string | null>;
+}) {
+  return (
+    <>
+      <View style={styles.qrActions}>
+        <View style={styles.half}>
+          <PrimaryButton
+            label="Share"
+            onPress={async () => {
+              const uri = await file();
+              if (uri) await shareFile(uri, 'image/png');
+              else notify('Couldn’t render the QR code');
+            }}
+          />
+        </View>
+        <View style={styles.half}>
+          <GhostButton
+            label="Save to Photos"
+            onPress={async () => {
+              const uri = await file();
+              if (!uri) return notify('Couldn’t render the QR code');
+              const problem = await saveToPhotos(uri);
+              notify(problem ?? 'Saved to Photos');
+            }}
+          />
+        </View>
+      </View>
+      <GhostButton label={copyLabel} onPress={onCopy} />
+    </>
+  );
+}
+
+function qrFileFrom(
+  svg: { toDataURL: (cb: (b64: string) => void) => void } | null,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    if (!svg) return resolve(null);
+    svg.toDataURL((b64) => {
+      try {
+        const uri = tempFileUri('png', 'qr');
+        new File(uri).write(b64, { encoding: 'base64' });
+        resolve(uri);
+      } catch {
+        resolve(null);
+      }
+    });
+  });
+}
+
+function SwipeRow({ children, onDelete }: { children: ReactNode; onDelete: () => void }) {
+  const [{ x, pan }] = useState(() => {
+    const translate = new Animated.Value(0);
+    const responder = PanResponder.create({
+      onMoveShouldSetPanResponderCapture: (_, g) =>
+        g.dx < -10 && Math.abs(g.dx) > Math.abs(g.dy) + 6,
+      onPanResponderMove: (_, g) => {
+        translate.setValue(Math.min(0, Math.max(g.dx, -160)));
+      },
+      onPanResponderRelease: (_, g) => {
+        if (g.dx < -120 || g.vx < -0.8) {
+          onDelete();
+          return;
+        }
+        Animated.spring(translate, {
+          toValue: g.dx < -48 ? -88 : 0,
+          useNativeDriver: true,
+          bounciness: 0,
+        }).start();
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(translate, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
+      },
+    });
+    return { x: translate, pan: responder };
+  });
+
+  return (
+    <View style={styles.swipeWrap}>
+      <Pressable accessibilityLabel="Delete" onPress={onDelete} style={styles.swipeDelete}>
+        <Text style={styles.swipeDeleteLabel}>Delete</Text>
+      </Pressable>
+      <Animated.View style={{ transform: [{ translateX: x }] }} {...pan.panHandlers}>
+        {children}
+      </Animated.View>
+    </View>
   );
 }
 
@@ -373,8 +546,28 @@ const styles = StyleSheet.create({
   warnTitle: { fontSize: 15, fontWeight: '700', color: '#9A4D00' },
   warnLine: { fontSize: 14, color: '#7A3E00' },
   okLine: { fontSize: 14, color: colors.good },
-  historyRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  empty: { gap: 6 },
+  historyRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   historyMain: { flex: 1, gap: 2 },
-  iconButton: { padding: 6 },
-  deleteGlyph: { fontSize: 16, color: colors.faint },
+  thumb: {
+    width: 56,
+    height: 56,
+    borderRadius: 8,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  swipeWrap: { borderRadius: 18, overflow: 'hidden' },
+  swipeDelete: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    width: 88,
+    backgroundColor: colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  swipeDeleteLabel: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
 });

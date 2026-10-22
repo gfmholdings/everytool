@@ -4,7 +4,7 @@
 // that already exists moves it to the top instead of duplicating it, and
 // the vault keeps at most MAX_CLIPS (oldest unpinned go first).
 
-import type { AppState, Clip } from '../types';
+import type { AppState, Clip, QrHistoryItem } from '../types';
 
 export const MAX_CLIPS = 500;
 
@@ -82,22 +82,29 @@ export function clearUnpinned(state: AppState): AppState {
  * reachable (older builds kept them only in AsyncStorage) into the App
  * Group, where the keyboard can see them.
  */
+/** Same rule as mergeQrHistory: identical content keeps the newer row, cap 100. */
+function mergeQr(primary: QrHistoryItem[], extra: QrHistoryItem[]): QrHistoryItem[] {
+  const byKey = new Map<string, QrHistoryItem>();
+  for (const item of [...extra, ...primary]) {
+    const key = `${item.direction}\n${item.payload}`;
+    const prev = byKey.get(key);
+    if (!prev || item.createdAt >= prev.createdAt) byKey.set(key, item);
+  }
+  return [...byKey.values()]
+    .sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? -1 : 1))
+    .slice(0, 100);
+}
+
 export function mergeStates(primary: AppState, extra: AppState): AppState {
   const cdIds = new Set(primary.countdowns.map((c) => c.id));
   const clipIds = new Set(primary.clips.map((c) => c.id));
   const clipTexts = new Set(primary.clips.map((c) => c.text));
-  const qrIds = new Set(primary.qrHistory.map((q) => q.id));
   return {
     clips: bounded([
       ...primary.clips,
       ...extra.clips.filter((c) => !clipIds.has(c.id) && !clipTexts.has(c.text)),
     ]),
-    qrHistory: [
-      ...primary.qrHistory,
-      ...extra.qrHistory.filter((q) => !qrIds.has(q.id)),
-    ]
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .slice(0, 100),
+    qrHistory: mergeQr(primary.qrHistory, extra.qrHistory),
     countdowns: [...primary.countdowns, ...extra.countdowns.filter((c) => !cdIds.has(c.id))],
   };
 }

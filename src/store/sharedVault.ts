@@ -1,6 +1,7 @@
 import { requireOptionalNativeModule } from 'expo-modules-core';
 
 import { APP_GROUP_ID, BROADCAST_EXTENSION_ID } from '../config';
+import { normalizeQrHistory } from '../lib/qrHistory';
 import type { TextBox } from '../lib/receipt';
 import type { AppState } from '../types';
 
@@ -77,7 +78,7 @@ export function parseState(json: string | null | undefined): AppState | null {
       clips: Array.isArray(parsed.clips)
         ? parsed.clips.filter((c) => c && typeof c.text === 'string' && typeof c.id === 'string')
         : [],
-      qrHistory: Array.isArray(parsed.qrHistory) ? parsed.qrHistory : [],
+      qrHistory: normalizeQrHistory(parsed.qrHistory),
       countdowns: Array.isArray(parsed.countdowns)
         ? parsed.countdowns.filter(
             (c) => c && typeof c.title === 'string' && typeof c.date === 'number',
