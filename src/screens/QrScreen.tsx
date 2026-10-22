@@ -25,13 +25,23 @@ import {
   qrContentPreview,
   qrTypeLabel,
 } from '../lib/qrHistory';
-import { describePayload, wifiPayload, contactPayload, type WifiSecurity } from '../lib/qrpayload';
+import {
+  QR_AUTOSAVE_MS,
+  autosaveDecision,
+  displayedQr,
+  emptyMaker,
+  payloadFor,
+  switchMakerKind,
+  type MakerFields,
+  type MakerKind,
+  type MakerSecurity,
+} from '../lib/qrMaker';
+import { describePayload } from '../lib/qrpayload';
 import { useStore } from '../store/AppStore';
 import { colors, type } from '../theme';
 import type { QrHistoryItem, QrStyle } from '../types';
 
 type Tab = 'make' | 'scan' | 'history';
-type Kind = 'text' | 'wifi' | 'contact';
 
 export function QrScreen({
   onBack,
@@ -45,40 +55,105 @@ export function QrScreen({
 }) {
   const { state, addQrHistory, deleteQrHistory, clearQrHistory } = useStore();
   const [tab, setTab] = useState<Tab>('make');
-  const [kind, setKind] = useState<Kind>('text');
-  const [text, setText] = useState('');
-  const [ssid, setSsid] = useState('');
-  const [password, setPassword] = useState('');
-  const [security, setSecurity] = useState<WifiSecurity>('WPA');
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [email, setEmail] = useState('');
-  const [made, setMade] = useState<string | null>(null);
+  const [fields, setFields] = useState<MakerFields>(() => emptyMaker());
   const [openId, setOpenId] = useState<string | null>(null);
   const qrRef = useRef<{ toDataURL: (cb: (b64: string) => void) => void } | null>(null);
+  const fieldsRef = useRef(fields);
+  const lastSavedRef = useRef<string | null>(null);
+  const addRef = useRef(addQrHistory);
+
+  useEffect(() => {
+    fieldsRef.current = fields;
+  }, [fields]);
+
+  useEffect(() => {
+    addRef.current = addQrHistory;
+  }, [addQrHistory]);
+
+  const writeHistory = (payload: string) => {
+    addRef.current({
+      direction: 'made',
+      payload,
+      style: DEFAULT_QR_STYLE,
+    });
+  };
+
+  // Settled typing writes itself. The timer resets on every edit, so a
+  // burst of keystrokes becomes one history row.
+  useEffect(() => {
+    if (tab !== 'make') return;
+    const timer = setTimeout(() => {
+      const decision = autosaveDecision({
+        payload: payloadFor(fieldsRef.current),
+        lastSaved: lastSavedRef.current,
+        quietMs: QR_AUTOSAVE_MS,
+        leaving: false,
+      });
+      if (decision.save) {
+        addRef.current({
+          direction: 'made',
+          payload: decision.save,
+          style: DEFAULT_QR_STYLE,
+        });
+      }
+      lastSavedRef.current = decision.lastSaved;
+    }, QR_AUTOSAVE_MS);
+    return () => clearTimeout(timer);
+  }, [fields, tab]);
+
+  // Back leaves the tool and unmounts this screen. Commit whatever is
+  // still waiting, then the next visit starts from emptyMaker().
+  useEffect(() => {
+    return () => {
+      const decision = autosaveDecision({
+        payload: payloadFor(fieldsRef.current),
+        lastSaved: lastSavedRef.current,
+        quietMs: 0,
+        leaving: true,
+      });
+      if (decision.save) {
+        addRef.current({
+          direction: 'made',
+          payload: decision.save,
+          style: DEFAULT_QR_STYLE,
+        });
+      }
+    };
+  }, []);
 
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = useState(false);
   const scannedRef = useRef(false);
   const [scanned, setScanned] = useState<string | null>(null);
 
-  const buildPayload = (): string | null => {
-    if (kind === 'text') return text.trim() ? text : null;
-    if (kind === 'wifi') return ssid.trim() ? wifiPayload(ssid, password, security) : null;
-    return name.trim()
-      ? contactPayload({ name, phone: phone || undefined, email: email || undefined })
-      : null;
+  const preview = displayedQr(fields);
+
+  const commitNow = () => {
+    const decision = autosaveDecision({
+      payload: payloadFor(fields),
+      lastSaved: lastSavedRef.current,
+      quietMs: 0,
+      leaving: true,
+    });
+    if (decision.save) writeHistory(decision.save);
+    lastSavedRef.current = decision.lastSaved;
+  };
+
+  const onTab = (next: Tab) => {
+    if (tab === 'make' && next !== 'make') commitNow();
+    setTab(next);
+  };
+
+  const onKind = (next: MakerKind) => {
+    if (next === fields.kind) return;
+    commitNow();
+    lastSavedRef.current = null;
+    setFields(switchMakerKind(fields, next));
   };
 
   const make = () => {
-    const payload = buildPayload();
-    if (!payload) return;
-    setMade(payload);
-    addQrHistory({
-      direction: 'made',
-      payload,
-      style: DEFAULT_QR_STYLE,
-    });
+    if (!preview) return;
+    commitNow();
   };
 
   const onScan = (value: string) => {
@@ -122,6 +197,20 @@ export function QrScreen({
     if (!initialImage || scannedShared.current === initialImage) return;
     scannedShared.current = initialImage;
     const t = setTimeout(() => {
+      const decision = autosaveDecision({
+        payload: payloadFor(fieldsRef.current),
+        lastSaved: lastSavedRef.current,
+        quietMs: 0,
+        leaving: true,
+      });
+      if (decision.save) {
+        addRef.current({
+          direction: 'made',
+          payload: decision.save,
+          style: DEFAULT_QR_STYLE,
+        });
+      }
+      lastSavedRef.current = decision.lastSaved;
       setTab('scan');
       void scanImage(initialImage);
     }, 0);
@@ -147,7 +236,7 @@ export function QrScreen({
           { id: 'history', label: 'History' },
         ]}
         value={tab}
-        onChange={setTab}
+        onChange={onTab}
       />
 
       {tab === 'make' && (
@@ -158,52 +247,81 @@ export function QrScreen({
               { id: 'wifi', label: 'Wi-Fi' },
               { id: 'contact', label: 'Contact' },
             ]}
-            value={kind}
-            onChange={setKind}
+            value={fields.kind}
+            onChange={onKind}
           />
-          {kind === 'text' && (
-            <Field value={text} onChange={setText} placeholder="Text or a link" multiline testID="qr.text" />
+          {fields.kind === 'text' && (
+            <Field
+              value={fields.text}
+              onChange={(text) => setFields((prev) => ({ ...prev, text }))}
+              placeholder="Text or a link"
+              multiline
+              testID="qr.text"
+            />
           )}
-          {kind === 'wifi' && (
+          {fields.kind === 'wifi' && (
             <>
-              <Field value={ssid} onChange={setSsid} placeholder="Network name" />
-              <Field value={password} onChange={setPassword} placeholder="Password" secure />
+              <Field
+                value={fields.ssid}
+                onChange={(ssid) => setFields((prev) => ({ ...prev, ssid }))}
+                placeholder="Network name"
+              />
+              <Field
+                value={fields.password}
+                onChange={(password) => setFields((prev) => ({ ...prev, password }))}
+                placeholder="Password"
+                secure
+              />
               <Segmented
                 options={[
-                  { id: 'WPA' as WifiSecurity, label: 'WPA' },
-                  { id: 'WEP' as WifiSecurity, label: 'WEP' },
-                  { id: 'nopass' as WifiSecurity, label: 'Open' },
+                  { id: 'WPA' as MakerSecurity, label: 'WPA' },
+                  { id: 'WEP' as MakerSecurity, label: 'WEP' },
+                  { id: 'nopass' as MakerSecurity, label: 'Open' },
                 ]}
-                value={security}
-                onChange={setSecurity}
+                value={fields.security}
+                onChange={(security) => setFields((prev) => ({ ...prev, security }))}
               />
             </>
           )}
-          {kind === 'contact' && (
+          {fields.kind === 'contact' && (
             <>
-              <Field value={name} onChange={setName} placeholder="Name" />
-              <Field value={phone} onChange={setPhone} placeholder="Phone (optional)" keyboard="phone-pad" />
-              <Field value={email} onChange={setEmail} placeholder="Email (optional)" keyboard="email-address" />
+              <Field
+                value={fields.name}
+                onChange={(name) => setFields((prev) => ({ ...prev, name }))}
+                placeholder="Name"
+              />
+              <Field
+                value={fields.phone}
+                onChange={(phone) => setFields((prev) => ({ ...prev, phone }))}
+                placeholder="Phone (optional)"
+                keyboard="phone-pad"
+              />
+              <Field
+                value={fields.email}
+                onChange={(email) => setFields((prev) => ({ ...prev, email }))}
+                placeholder="Email (optional)"
+                keyboard="email-address"
+              />
             </>
           )}
-          <PrimaryButton label="Make QR code" onPress={make} disabled={!buildPayload()} />
-          {made && (
+          <PrimaryButton label="Make QR code" onPress={make} disabled={!preview} />
+          {preview && (
             <Card style={styles.qrCard}>
               <QrMark
-                value={made}
+                value={preview}
                 qrStyle={DEFAULT_QR_STYLE}
                 size={220}
                 quietZone={16}
                 qrRef={qrRef}
               />
               <Text style={[type.small, styles.center]} numberOfLines={2}>
-                {made}
+                {preview}
               </Text>
               <QrFileActions
                 notify={notify}
                 copyLabel="Copy text"
-                subject={qrContentPreview(made)}
-                onCopy={() => void Clipboard.setStringAsync(made).then(() => notify('Copied'))}
+                subject={qrContentPreview(preview)}
+                onCopy={() => void Clipboard.setStringAsync(preview).then(() => notify('Copied'))}
                 file={() => qrFileFrom(qrRef.current)}
               />
             </Card>
