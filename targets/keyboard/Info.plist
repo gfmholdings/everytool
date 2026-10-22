@@ -10,12 +10,12 @@
       <string>$(PRODUCT_MODULE_NAME).KeyboardViewController</string>
       <key>NSExtensionAttributes</key>
       <dict>
-        <!-- Open access is requested for two things only: reading the
-             system clipboard (the Text tab's "from clipboard" source)
-             and the App Group vault. The keyboard types perfectly well
-             with it off; the tabs say so when data is unavailable. The
-             keyboard never uses the network — that is a product promise,
-             and nothing in this target links a networking call. -->
+        <!-- Required. A keyboard with this set to false cannot read an
+             App Group container or UIPasteboard. The clipboard tab and
+             snippet expansion use both. Typing still works when the user
+             leaves Full Access off (every vault/pasteboard call checks
+             hasFullAccess). This does not open a network path: the
+             extension makes no URL request. -->
         <key>RequestsOpenAccess</key>
         <true/>
         <key>IsASCIICapable</key>

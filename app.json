@@ -79,6 +79,17 @@
           "group.app.everytool.ios"
         ]
       },
+      "privacyManifests": {
+        "NSPrivacyTracking": false,
+        "NSPrivacyTrackingDomains": [],
+        "NSPrivacyCollectedDataTypes": [],
+        "NSPrivacyAccessedAPITypes": [
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryUserDefaults",
+            "NSPrivacyAccessedAPITypeReasons": ["1C8F.1"]
+          }
+        ]
+      },
       "infoPlist": {
         "NSCameraUsageDescription": "Everytool uses the camera to scan QR codes and receipts. Everything is read on this phone.",
         "NSMicrophoneUsageDescription": "Everytool never records audio. This is only requested if you start a screen recording that includes sound.",
@@ -97,6 +108,7 @@
       "expo-image-picker",
       "expo-camera",
       "expo-media-library",
+      "expo-updates",
       "@react-native-community/datetimepicker",
       "./plugins/withOpenToolIntent.js"
     ],
@@ -106,7 +118,13 @@
     "scheme": "everytool",
     "slug": "everytool",
     "updates": {
-      "url": "https://u.expo.dev/74d5cac4-d621-4281-af33-4305f1a3eba8"
+      "enabled": true,
+      "url": "https://u.expo.dev/74d5cac4-d621-4281-af33-4305f1a3eba8",
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0,
+      "requestHeaders": {
+        "expo-channel-name": "production"
+      }
     },
     "userInterfaceStyle": "automatic",
     "version": "1.0.0",

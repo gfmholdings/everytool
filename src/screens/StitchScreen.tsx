@@ -97,6 +97,16 @@ export function StitchScreen({
   const [viewer, setViewer] = useState(false);
   const autoStitched = useRef<string | null>(null);
   const busyRef = useRef(false);
+  /** Latest committed image. Updated synchronously, not on the next render,
+   *  so Save cannot read a pre-redaction URI that setState has not flushed. */
+  const resultRef = useRef<StitchResult | null>(null);
+  /** In-flight "Hide details" rewrite. Save waits for it. */
+  const pendingRender = useRef<Promise<void> | null>(null);
+
+  const commitResult = useCallback((next: StitchResult | null) => {
+    resultRef.current = next;
+    setResult(next);
+  }, []);
 
   const onProgress = useCallback((phase: StitchPhase, done: number, total: number) => {
     setProgress(
@@ -110,13 +120,13 @@ export function StitchScreen({
       busyRef.current = true;
       setBusy(true);
       setError(null);
-      setResult(null);
+      commitResult(null);
       try {
         const out = await stitchFrames(inputs, {
           mode: from === 'record' ? 'record' : 'photos',
           onProgress,
         });
-        setResult(out);
+        commitResult(out);
         setResultFrom(from);
         if (out.stackedSeams > 0) {
           notify(
@@ -133,7 +143,7 @@ export function StitchScreen({
         setProgress(null);
       }
     },
-    [notify, onProgress],
+    [commitResult, notify, onProgress],
   );
 
   // Watch the broadcast inbox while this screen is open: show live
@@ -229,7 +239,7 @@ export function StitchScreen({
     startSession(now);
     setSessionAt(now);
     setSessionCount(0);
-    setResult(null);
+    commitResult(null);
     notify('Session started — take screenshots as you scroll');
   };
 
@@ -318,7 +328,7 @@ export function StitchScreen({
       height: a.height,
     }));
     setShots((s) => [...s, ...picked]);
-    setResult(null);
+    commitResult(null);
     setError(null);
   };
 
@@ -333,16 +343,25 @@ export function StitchScreen({
     });
 
   const save = async () => {
-    if (!result) return;
-    const problem = await saveToPhotos(result.uri);
+    const pending = pendingRender.current;
+    if (pending) await pending;
+    const current = resultRef.current;
+    if (!current) return;
+    // Snapshot after the redaction render has committed. PhotoKit must
+    // receive that file, not the image from before Hide details.
+    const uri = current.uri;
+    const problem = await saveToPhotos(uri);
     if (problem) setError(problem);
     else notify('Saved to Photos');
   };
 
   const copyImage = async () => {
-    if (!result) return;
+    const pending = pendingRender.current;
+    if (pending) await pending;
+    const current = resultRef.current;
+    if (!current) return;
     try {
-      const b64 = await new File(result.uri).base64();
+      const b64 = await new File(current.uri).base64();
       await Clipboard.setImageAsync(b64);
       notify('Copied');
     } catch {
@@ -350,10 +369,49 @@ export function StitchScreen({
     }
   };
 
+  const applyRedactions = useCallback(
+    async (rects: Redaction[]): Promise<boolean> => {
+      const base = resultRef.current;
+      if (!base || busyRef.current) return false;
+      busyRef.current = true;
+      setBusy(true);
+      const job = (async (): Promise<boolean> => {
+        try {
+          const next = await renderStitch(base, rects, onProgress);
+          commitResult(next);
+          notify(
+            rects.length
+              ? `Hid ${rects.length} area${rects.length === 1 ? '' : 's'}`
+              : 'All areas shown again',
+          );
+          return true;
+        } catch (e) {
+          setError(e instanceof Error ? e.message : 'Couldn’t update the image.');
+          return false;
+        } finally {
+          busyRef.current = false;
+          setBusy(false);
+          setProgress(null);
+        }
+      })();
+      const gate = job.then(
+        () => undefined,
+        () => undefined,
+      );
+      pendingRender.current = gate;
+      try {
+        return await job;
+      } finally {
+        if (pendingRender.current === gate) pendingRender.current = null;
+      }
+    },
+    [commitResult, notify, onProgress],
+  );
+
   const discardRecording = () => {
     clearBroadcastInbox();
     setInbox({ frames: [], finished: false });
-    if (resultFrom === 'record') setResult(null);
+    if (resultFrom === 'record') commitResult(null);
     notify('Recording discarded');
   };
 
@@ -575,21 +633,7 @@ export function StitchScreen({
             visible={viewer}
             onClose={() => setViewer(false)}
             busy={busy}
-            onApply={async (rects) => {
-              if (busyRef.current) return;
-              busyRef.current = true;
-              setBusy(true);
-              try {
-                setResult(await renderStitch(result, rects, onProgress));
-                notify(rects.length ? `Hid ${rects.length} area${rects.length === 1 ? '' : 's'}` : 'All areas shown again');
-              } catch (e) {
-                setError(e instanceof Error ? e.message : 'Couldn’t update the image.');
-              } finally {
-                busyRef.current = false;
-                setBusy(false);
-                setProgress(null);
-              }
-            }}
+            onApply={applyRedactions}
           />
         </>
       )}
@@ -679,7 +723,7 @@ function FullLengthViewer({
   result: StitchResult;
   visible: boolean;
   onClose: () => void;
-  onApply: (rects: Redaction[]) => void;
+  onApply: (rects: Redaction[]) => Promise<boolean>;
   busy: boolean;
 }) {
   const insets = useSafeAreaInsets();
@@ -798,8 +842,14 @@ function FullLengthViewer({
               <Pressable
                 disabled={busy || !changed}
                 onPress={() => {
-                  setHiding(false);
-                  onApply(rects);
+                  // Stay in hiding mode until the redacted file is committed.
+                  // "Hide details" is the signal that Apply finished; leaving
+                  // early let Save run against the unredacted image and let
+                  // the later "Hid N areas" toast replace "Saved to Photos".
+                  void (async () => {
+                    const ok = await onApply(rects);
+                    if (ok) setHiding(false);
+                  })();
                 }}
                 hitSlop={8}
               >
@@ -819,7 +869,7 @@ function FullLengthViewer({
                 </Text>
               )}
               {changed && (
-                <Pressable disabled={busy} onPress={() => onApply(rects)} hitSlop={8}>
+                <Pressable disabled={busy} onPress={() => void onApply(rects)} hitSlop={8}>
                   <Text style={[styles.toolText, styles.toolPrimary]}>{busy ? 'Saving…' : 'Apply'}</Text>
                 </Pressable>
               )}

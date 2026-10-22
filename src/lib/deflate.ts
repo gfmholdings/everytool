@@ -1,4 +1,4 @@
-import { unzlibSync, Zlib } from 'fflate';
+import { unzlibSync, Unzlib, Zlib } from 'fflate';
 
 // PNG codec for Everytool: a spec-written raw DEFLATE decoder (kept for
 // tests and tiny inputs), a fast row-streaming PNG decoder and a streaming
@@ -197,8 +197,54 @@ export function decodePngRows(
   onRow: (y: number, rgbaRow: Uint8Array) => void,
   stopAfterRow?: number,
 ): PngInfo {
-  // Verify the PNG signature before chunk parsing, and name the actual
-  // format when a foreign file slips through.
+  const parsed = readPngChunks(bytes);
+  const stride = parsed.width * parsed.channels;
+  const raw = unzlibSync(parsed.idat);
+  paintPngRows(raw, parsed.width, parsed.height, parsed.channels, stride, onRow, stopAfterRow);
+  return { width: parsed.width, height: parsed.height, channels: parsed.channels };
+}
+
+/**
+ * Same pixels as {@link decodePngRows}, but the inflate stops once the
+ * rows the caller asked for are in hand, and the unfilter yields every
+ * few dozen rows. A stitch writes thousands of rows on the JS thread;
+ * doing that in one synchronous turn freezes the UI on the last progress
+ * line (the "Writing the image · 2 of 7" stall) for the whole segment.
+ */
+export async function decodePngRowsAsync(
+  bytes: Uint8Array,
+  onRow: (y: number, rgbaRow: Uint8Array) => void,
+  stopAfterRow?: number,
+): Promise<PngInfo> {
+  const parsed = readPngChunks(bytes);
+  const stride = parsed.width * parsed.channels;
+  const last =
+    stopAfterRow === undefined
+      ? parsed.height - 1
+      : Math.min(parsed.height - 1, stopAfterRow);
+  const raw = inflatePrefix(parsed.idat, (last + 1) * (stride + 1));
+  const cursor = new PngRowCursor(raw, parsed.width, parsed.channels, stride, onRow, last);
+  const yieldEvery = 48;
+  while (!cursor.done) {
+    cursor.paint(yieldEvery);
+    if (!cursor.done) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    }
+  }
+  return { width: parsed.width, height: parsed.height, channels: parsed.channels };
+}
+
+interface PngChunks {
+  width: number;
+  height: number;
+  channels: number;
+  idat: Uint8Array;
+}
+
+/** Header + concatenated IDAT. Shared by the sync and yielding decoders. */
+function readPngChunks(bytes: Uint8Array): PngChunks {
   const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
   const isPng =
     bytes.length >= PNG_SIGNATURE.length &&
@@ -275,74 +321,166 @@ export function decodePngRows(
     idat.set(part, at);
     at += part.length;
   }
-  const raw = unzlibSync(idat);
-  const stride = width * channels;
-  if (raw.length < (stride + 1) * height) {
-    throw new Error('PNG data is truncated.');
-  }
-  let prev = new Uint8Array(stride);
-  let row = new Uint8Array(stride);
-  const rgba = new Uint8Array(width * 4);
-  const last = stopAfterRow === undefined ? height - 1 : Math.min(height - 1, stopAfterRow);
-  for (let y = 0; y <= last; y += 1) {
-    const rowStart = y * (stride + 1);
-    const filter = raw[rowStart];
-    const src = rowStart + 1;
-    switch (filter) {
-      case 0:
-        row.set(raw.subarray(src, src + stride));
-        break;
-      case 1:
-        for (let x = 0; x < stride; x += 1) {
-          const a = x >= channels ? row[x - channels]! : 0;
-          row[x] = (raw[src + x]! + a) & 0xff;
-        }
-        break;
-      case 2:
-        for (let x = 0; x < stride; x += 1) {
-          row[x] = (raw[src + x]! + prev[x]!) & 0xff;
-        }
-        break;
-      case 3:
-        for (let x = 0; x < stride; x += 1) {
-          const a = x >= channels ? row[x - channels]! : 0;
-          row[x] = (raw[src + x]! + ((a + prev[x]!) >> 1)) & 0xff;
-        }
-        break;
-      case 4:
-        for (let x = 0; x < stride; x += 1) {
-          const a = x >= channels ? row[x - channels]! : 0;
-          const c = x >= channels ? prev[x - channels]! : 0;
-          row[x] = (raw[src + x]! + paeth(a, prev[x]!, c)) & 0xff;
-        }
-        break;
-      default:
-        throw new Error('Corrupt PNG row filter.');
+  return { width, height, channels, idat };
+}
+
+/**
+ * Inflate only the zlib prefix needed for `need` uncompressed bytes.
+ * Later rows of a frame the stitch will not use are never decompressed.
+ */
+function inflatePrefix(idat: Uint8Array, need: number): Uint8Array {
+  if (need <= 0) return new Uint8Array(0);
+  const chunks: Uint8Array[] = [];
+  let got = 0;
+  const infl = new Unzlib((chunk) => {
+    if (got >= need || chunk.length === 0) return;
+    // fflate may reuse the buffer it hands us; copy the bytes we keep.
+    const take = Math.min(chunk.length, need - got);
+    chunks.push(chunk.slice(0, take));
+    got += take;
+  });
+  const step = 32 * 1024;
+  for (let off = 0; off < idat.length && got < need; off += step) {
+    const end = Math.min(idat.length, off + step);
+    try {
+      infl.push(idat.subarray(off, end), end === idat.length);
+    } catch (e) {
+      if (got < need) {
+        throw e instanceof Error ? e : new Error('PNG data is truncated.');
+      }
+      break;
     }
-    if (channels === 4) {
-      rgba.set(row);
-    } else {
-      for (let x = 0, si = 0, di = 0; x < width; x += 1, si += channels, di += 4) {
-        const v = row[si]!;
-        if (channels >= 3) {
-          rgba[di] = v;
-          rgba[di + 1] = row[si + 1]!;
-          rgba[di + 2] = row[si + 2]!;
-          rgba[di + 3] = 255;
-        } else {
-          rgba[di] = v;
-          rgba[di + 1] = v;
-          rgba[di + 2] = v;
-          rgba[di + 3] = channels === 2 ? row[si + 1]! : 255;
+  }
+  if (got < need) throw new Error('PNG data is truncated.');
+  const raw = new Uint8Array(need);
+  let at = 0;
+  for (const c of chunks) {
+    raw.set(c, at);
+    at += c.length;
+  }
+  return raw;
+}
+
+/** Unfilter rows `0..stopAfterRow`. Synchronous: callers that must throw
+ *  (and the unit tests) depend on that. */
+function paintPngRows(
+  raw: Uint8Array,
+  width: number,
+  height: number,
+  channels: number,
+  stride: number,
+  onRow: (y: number, rgbaRow: Uint8Array) => void,
+  stopAfterRow?: number,
+): void {
+  const last = stopAfterRow === undefined ? height - 1 : Math.min(height - 1, stopAfterRow);
+  new PngRowCursor(raw, width, channels, stride, onRow, last).paint(last + 1);
+}
+
+/** One forward pass over inflated PNG rows. `paint(n)` continues where
+ *  the previous call stopped, so a yield does not restart the filter. */
+class PngRowCursor {
+  private raw: Uint8Array;
+  private width: number;
+  private channels: number;
+  private stride: number;
+  private onRow: (y: number, rgbaRow: Uint8Array) => void;
+  private prev: Uint8Array;
+  private row: Uint8Array;
+  private rgba: Uint8Array;
+  private y = 0;
+  readonly last: number;
+
+  constructor(
+    raw: Uint8Array,
+    width: number,
+    channels: number,
+    stride: number,
+    onRow: (y: number, rgbaRow: Uint8Array) => void,
+    last: number,
+  ) {
+    this.raw = raw;
+    this.width = width;
+    this.channels = channels;
+    this.stride = stride;
+    this.onRow = onRow;
+    this.last = last;
+    if (last >= 0 && raw.length < (stride + 1) * (last + 1)) {
+      throw new Error('PNG data is truncated.');
+    }
+    this.prev = new Uint8Array(stride);
+    this.row = new Uint8Array(stride);
+    this.rgba = new Uint8Array(width * 4);
+  }
+
+  get done(): boolean {
+    return this.y > this.last;
+  }
+
+  paint(count: number): void {
+    const end = Math.min(this.last, this.y + count - 1);
+    const { raw, stride, channels, width, rgba } = this;
+    for (; this.y <= end; this.y += 1) {
+      const y = this.y;
+      const row = this.row;
+      const prev = this.prev;
+      const rowStart = y * (stride + 1);
+      const filter = raw[rowStart];
+      const src = rowStart + 1;
+      switch (filter) {
+        case 0:
+          row.set(raw.subarray(src, src + stride));
+          break;
+        case 1:
+          for (let x = 0; x < stride; x += 1) {
+            const a = x >= channels ? row[x - channels]! : 0;
+            row[x] = (raw[src + x]! + a) & 0xff;
+          }
+          break;
+        case 2:
+          for (let x = 0; x < stride; x += 1) {
+            row[x] = (raw[src + x]! + prev[x]!) & 0xff;
+          }
+          break;
+        case 3:
+          for (let x = 0; x < stride; x += 1) {
+            const a = x >= channels ? row[x - channels]! : 0;
+            row[x] = (raw[src + x]! + ((a + prev[x]!) >> 1)) & 0xff;
+          }
+          break;
+        case 4:
+          for (let x = 0; x < stride; x += 1) {
+            const a = x >= channels ? row[x - channels]! : 0;
+            const c = x >= channels ? prev[x - channels]! : 0;
+            row[x] = (raw[src + x]! + paeth(a, prev[x]!, c)) & 0xff;
+          }
+          break;
+        default:
+          throw new Error('Corrupt PNG row filter.');
+      }
+      if (channels === 4) {
+        rgba.set(row);
+      } else {
+        for (let x = 0, si = 0, di = 0; x < width; x += 1, si += channels, di += 4) {
+          const v = row[si]!;
+          if (channels >= 3) {
+            rgba[di] = v;
+            rgba[di + 1] = row[si + 1]!;
+            rgba[di + 2] = row[si + 2]!;
+            rgba[di + 3] = 255;
+          } else {
+            rgba[di] = v;
+            rgba[di + 1] = v;
+            rgba[di + 2] = v;
+            rgba[di + 3] = channels === 2 ? row[si + 1]! : 255;
+          }
         }
       }
+      this.onRow(y, rgba);
+      const t = this.prev;
+      this.prev = this.row;
+      this.row = t;
     }
-    onRow(y, rgba);
-    const t = prev;
-    prev = row;
-    row = t;
   }
-  return { width, height, channels };
 }
 
 // -- Streaming PNG writer (stored DEFLATE blocks; valid PNG, no compression)

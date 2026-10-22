@@ -1,8 +1,11 @@
-# Codemagic port of the two GitHub Actions pipelines:
+# Codemagic workflows (manual triggers only):
 #   .github/workflows/ios-simulator-tests.yml  ->  simulator-regression
 #   .github/workflows/ios-testflight.yml       ->  testflight
+#   ios-testflight  — lean signed archive: typecheck, lint, unit tests,
+#     then TestFlight upload. Not a prerequisite of the others, and
+#     simulator-regression is not a prerequisite of it.
 #
-# MANUAL TRIGGERS ONLY: neither workflow has a `triggering:` section, so
+# MANUAL TRIGGERS ONLY: no workflow has a `triggering:` section, so
 # Codemagic never starts these builds on push/PR/tag. Every build is
 # started by hand (Codemagic UI or API) — deliberate, after the GitHub
 # minutes burn. Do not add automatic triggers.
@@ -417,5 +420,260 @@ workflows:
       # "Delete signing keychain (always)" step has no equivalent here:
       # Codemagic build VMs are ephemeral and destroyed after the build,
       # keychain included.
+      - build/export/*.ipa
+      - build/logs/**/*
+
+  ios-testflight:
+    name: iOS — TestFlight
+    # Archive plus up to 20 minutes to find the build and 40 minutes of
+    # Apple processing. 90 minutes is tight for that sum, so the cap is
+    # 120. Still manual-only, and not gated on simulator-regression.
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+    environment:
+      xcode: latest
+      # Node 22: `npm test` runs with --experimental-strip-types.
+      node: 22
+      groups:
+        - signing
+      vars:
+        EXPO_NO_TELEMETRY: "1"
+    scripts:
+      - name: Install dependencies
+        script: |
+          set -euo pipefail
+          npm ci
+      - name: Typecheck
+        script: |
+          set -euo pipefail
+          npx tsc --noEmit
+      - name: Lint
+        script: |
+          set -euo pipefail
+          npx eslint .
+      - name: Unit tests
+        script: |
+          set -euo pipefail
+          npm test
+      - name: Install signing certificate and provisioning profiles
+        script: |
+          set -euo pipefail
+          TMP_DIR="$CM_BUILD_DIR/build/tmp"
+          mkdir -p "$TMP_DIR"
+
+          CERT_PATH="$TMP_DIR/cert.p12"
+          printf '%s' "$CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+
+          KEYCHAIN_PATH="$TMP_DIR/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$CERT_P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+          echo "Code signing identities in build keychain:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+          PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PROFILES_DIR"
+
+          # application-identifier is TEAMID.bundleid. The team id has no
+          # dots, so the suffix after the first dot is the bundle id.
+          install_profile() {
+            local var_name="$1"
+            local expect_bundle="$2"
+            local raw="$TMP_DIR/$var_name.mobileprovision"
+            printf '%s' "${!var_name}" | base64 --decode > "$raw"
+            local plist="$TMP_DIR/$var_name.plist"
+            security cms -D -i "$raw" > "$plist"
+            local uuid name app_id bundle
+            uuid="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$plist")"
+            name="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$plist")"
+            app_id="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$plist")"
+            bundle="${app_id#*.}"
+            if [ "$bundle" != "$expect_bundle" ]; then
+              echo "::error::$var_name application-identifier is $app_id (bundle $bundle), expected $expect_bundle"
+              exit 1
+            fi
+            cp "$raw" "$PROFILES_DIR/$uuid.mobileprovision"
+            echo "Installed profile: $name ($uuid) -> $bundle"
+          }
+
+          install_profile PROFILE_APP_B64 app.everytool.ios
+          install_profile PROFILE_KEYBOARD_B64 app.everytool.ios.keyboard
+          install_profile PROFILE_SHARE_B64 app.everytool.ios.share
+          install_profile PROFILE_WIDGET_B64 app.everytool.ios.widget
+          install_profile PROFILE_BROADCAST_B64 app.everytool.ios.broadcast
+          install_profile PROFILE_BROADCASTUI_B64 app.everytool.ios.broadcastui
+      - name: Choose a CFBundleVersion above the latest TestFlight build
+        script: |
+          set -euo pipefail
+          if [ -z "${ASC_ISSUER_ID:-}" ] || [ -z "${ASC_KEY_ID:-}" ] || [ -z "${ASC_API_KEY_B64:-}" ]; then
+            echo "::error::ASC_ISSUER_ID, ASC_KEY_ID and ASC_API_KEY_B64 must be set in the signing group."
+            exit 1
+          fi
+          TMP_DIR="$CM_BUILD_DIR/build/tmp"
+          mkdir -p "$TMP_DIR" "$HOME/.appstoreconnect/private_keys"
+          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "$ASC_API_KEY_B64" | base64 --decode > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+
+          EFFECTIVE=""
+          if ! command -v app-store-connect >/dev/null 2>&1; then
+            echo "app-store-connect CLI is not on PATH (exit status: missing)."
+          else
+            set +e
+            LATEST="$(app-store-connect get-latest-testflight-build-number 6824418913 \
+              --all-versions \
+              --platform IOS \
+              --no-color \
+              --issuer-id "@env:ASC_ISSUER_ID" \
+              --key-id "@env:ASC_KEY_ID" \
+              --private-key "@file:${KEY_PATH}" 2>"$TMP_DIR/asc-latest.err")"
+            STATUS=$?
+            set -e
+            rm -f "$TMP_DIR/asc-latest.err"
+            LATEST="$(printf '%s' "$LATEST" | tr -d '[:space:]')"
+            echo "get-latest-testflight-build-number exit status: $STATUS"
+            if [ "$STATUS" -eq 0 ] && printf '%s' "$LATEST" | grep -Eq '^[0-9]+$'; then
+              EFFECTIVE=$((LATEST + 1))
+              echo "Latest TestFlight build is $LATEST; this build is $EFFECTIVE"
+            fi
+          fi
+          if [ -z "$EFFECTIVE" ]; then
+            EFFECTIVE=$((BUILD_NUMBER + 1000))
+            echo "No numeric latest build; using BUILD_NUMBER+1000 = $EFFECTIVE"
+          fi
+          echo "EFFECTIVE_BUILD_NUMBER=$EFFECTIVE" >> "$CM_ENV"
+      - name: Show Xcode version
+        script: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+      - name: Prebuild iOS project
+        script: |
+          set -euo pipefail
+          npx expo prebuild --platform ios --clean
+      - name: Patch signing settings (manual)
+        script: |
+          set -euo pipefail
+          if ! ruby -e "require 'xcodeproj'" 2>/dev/null; then
+            echo "xcodeproj gem missing — installing"
+            sudo gem install xcodeproj --no-document
+          fi
+          BUILD_NUMBER="$EFFECTIVE_BUILD_NUMBER" ruby scripts/patch-signing.rb
+      - name: Archive
+        script: |
+          set -uo pipefail
+          TMP_DIR="$CM_BUILD_DIR/build/tmp"
+          mkdir -p "$TMP_DIR" build/logs
+          if ! xcodebuild archive \
+            -workspace ios/Everytool.xcworkspace \
+            -scheme Everytool \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$TMP_DIR/Everytool.xcarchive" \
+            CURRENT_PROJECT_VERSION="$EFFECTIVE_BUILD_NUMBER" \
+            > "$TMP_DIR/archive.log" 2>&1; then
+            echo "::error::xcodebuild archive FAILED — diagnostics from archive.log:"
+            cp "$TMP_DIR/archive.log" build/logs/ || true
+            echo "----- all error: lines -----"
+            grep -n -E "error:|fatal error" "$TMP_DIR/archive.log" | head -100 || true
+            FIRST="$(grep -n -m1 -E "error:" "$TMP_DIR/archive.log" | cut -d: -f1 || true)"
+            if [ -n "${FIRST:-}" ]; then
+              START=$(( FIRST > 30 ? FIRST - 30 : 1 ))
+              echo "----- context around first error (lines $START..$((FIRST + 80))) -----"
+              sed -n "${START},$((FIRST + 80))p" "$TMP_DIR/archive.log"
+            fi
+            echo "----- failed build commands summary -----"
+            grep -n -A8 "The following build commands failed" "$TMP_DIR/archive.log" || true
+            echo "----- last 40 lines -----"
+            tail -40 "$TMP_DIR/archive.log"
+            exit 1
+          fi
+          echo "Archive succeeded:"
+          grep -E "ARCHIVE SUCCEEDED" "$TMP_DIR/archive.log" || true
+          cp "$TMP_DIR/archive.log" build/logs/ || true
+          ls -la "$TMP_DIR/Everytool.xcarchive"
+      - name: Export .ipa
+        script: |
+          set -uo pipefail
+          TMP_DIR="$CM_BUILD_DIR/build/tmp"
+          mkdir -p build/export build/logs
+          if ! xcodebuild -exportArchive \
+            -archivePath "$TMP_DIR/Everytool.xcarchive" \
+            -exportPath build/export \
+            -exportOptionsPlist scripts/ExportOptions.plist \
+            > "$TMP_DIR/export.log" 2>&1; then
+            echo "::error::xcodebuild -exportArchive FAILED — export.log:"
+            cp "$TMP_DIR/export.log" build/logs/ || true
+            grep -n -E "error:" "$TMP_DIR/export.log" | head -50 || true
+            tail -150 "$TMP_DIR/export.log"
+            exit 1
+          fi
+          echo "Export succeeded:"
+          grep -E "EXPORT SUCCEEDED" "$TMP_DIR/export.log" || true
+          cp "$TMP_DIR/export.log" build/logs/ || true
+          ls -lh build/export
+          IPA_PATH="$(ls build/export/*.ipa | head -1)"
+          echo "IPA_PATH=$IPA_PATH" >> "$CM_ENV"
+          echo "Exported IPA: $IPA_PATH"
+      - name: Verify .ipa build number
+        script: |
+          set -euo pipefail
+          TMP_DIR="$CM_BUILD_DIR/build/tmp"
+          mkdir -p "$TMP_DIR"
+          unzip -p "$IPA_PATH" 'Payload/*.app/Info.plist' > "$TMP_DIR/app-Info.plist"
+          APP_VER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$TMP_DIR/app-Info.plist")"
+          echo "App CFBundleVersion in .ipa: $APP_VER (expected $EFFECTIVE_BUILD_NUMBER)"
+          if [ "$APP_VER" != "$EFFECTIVE_BUILD_NUMBER" ]; then
+            echo "::error::App CFBundleVersion $APP_VER != build number $EFFECTIVE_BUILD_NUMBER — App Store Connect would reject this as a duplicate version."
+            exit 1
+          fi
+          for appex in $(unzip -Z1 "$IPA_PATH" | grep -E 'Payload/[^/]+\.app/PlugIns/[^/]+\.appex/Info\.plist$' || true); do
+            unzip -p "$IPA_PATH" "$appex" > "$TMP_DIR/appex-Info.plist"
+            V="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$TMP_DIR/appex-Info.plist")"
+            echo "$appex CFBundleVersion: $V"
+            if [ "$V" != "$EFFECTIVE_BUILD_NUMBER" ]; then
+              echo "::error::Extension $appex CFBundleVersion $V != build number $EFFECTIVE_BUILD_NUMBER (ITMS-90473)"
+              exit 1
+            fi
+          done
+      - name: Upload to TestFlight
+        script: |
+          set -euo pipefail
+          # Recreate the key in this step. Do not print it. Do not also
+          # declare a top-level publishing: block — that would upload twice.
+          # `--testflight` submits the uploaded build for TestFlight.
+          # Apple has to finish processing first; these waits fit inside
+          # max_build_duration. External beta review also needs the beta
+          # contact info already saved on the app in App Store Connect.
+          TMP_DIR="$CM_BUILD_DIR/build/tmp"
+          mkdir -p "$TMP_DIR" "$HOME/.appstoreconnect/private_keys" build/logs
+          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "$ASC_API_KEY_B64" | base64 --decode > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          if ! app-store-connect publish \
+            --path "$IPA_PATH" \
+            --testflight \
+            --max-find-build-wait 20 \
+            --max-build-processing-wait 40 \
+            --no-color \
+            --issuer-id "@env:ASC_ISSUER_ID" \
+            --key-id "@env:ASC_KEY_ID" \
+            --private-key "@file:${KEY_PATH}" \
+            > "$TMP_DIR/publish.log" 2>&1; then
+            echo "::error::app-store-connect publish failed (exit non-zero)."
+            cp "$TMP_DIR/publish.log" build/logs/asc-publish.log || true
+            # Drop lines that could echo a key or token, then show the rest.
+            grep -v -E -i "private.key|BEGIN PRIVATE|AuthKey_|eyJ" "$TMP_DIR/publish.log" | tail -80 || true
+            exit 1
+          fi
+          cp "$TMP_DIR/publish.log" build/logs/asc-publish.log || true
+          echo "TestFlight upload finished."
+    artifacts:
       - build/export/*.ipa
       - build/logs/**/*

@@ -81,9 +81,11 @@ function Root() {
   const [toast, setToast] = useState<string | null>(null);
   const [toastAnim] = useState(() => new Animated.Value(0));
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastGen = useRef(0);
 
   const notify = useCallback(
     (msg: string) => {
+      const gen = (toastGen.current += 1);
       setToast(msg);
       Animated.timing(toastAnim, {
         toValue: 1,
@@ -96,7 +98,10 @@ function Root() {
           toValue: 0,
           duration: 250,
           useNativeDriver: true,
-        }).start(() => setToast(null));
+        }).start(() => {
+          // A newer toast may already be showing. Don't clear it.
+          if (toastGen.current === gen) setToast(null);
+        });
       }, 2200);
     },
     [toastAnim],

@@ -1,7 +1,7 @@
 import { File, FileMode, Paths } from 'expo-file-system';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
-import { decodePngRows, PngStreamWriter, readPngSize } from './deflate';
+import { decodePngRows, decodePngRowsAsync, PngStreamWriter, readPngSize } from './deflate';
 import {
   analyzeFrames,
   emitSegments,
@@ -197,12 +197,12 @@ export async function stitchFrames(
   outFile.create();
   const sink = fileSink(outFile);
   try {
-    const writer = new PngStreamWriter(sink, analysis.width, analysis.height);
+    const writer = new PngStreamWriter(sink, analysis.width, analysis.height, { level: 1 });
     await emitSegments(
       analysis,
       async (frame, onRow, stopAfterRow) => {
         const bytes = await new File(frames[frame]!.uri).bytes();
-        decodePngRows(bytes, onRow, stopAfterRow);
+        await decodePngRowsAsync(bytes, onRow, stopAfterRow);
       },
       (rgba) => writer.writeRow(rgba),
       (done, total) => opts.onProgress?.('writing', done, total),
@@ -250,7 +250,7 @@ export async function renderStitch(
   outFile.create();
   const sink = fileSink(outFile);
   try {
-    const writer = new PngStreamWriter(sink, result.width, result.height);
+    const writer = new PngStreamWriter(sink, result.width, result.height, { level: 1 });
     const pix = new PixelateSink(result.width, redactions, pixelBlock(result.width), (row) =>
       writer.writeRow(row),
     );
@@ -258,7 +258,7 @@ export async function renderStitch(
       result,
       async (frame, onRow, stopAfterRow) => {
         const bytes = await new File(result.frames[frame]!.uri).bytes();
-        decodePngRows(bytes, onRow, stopAfterRow);
+        await decodePngRowsAsync(bytes, onRow, stopAfterRow);
       },
       (rgba) => pix.writeRow(rgba),
       (done, total) => onProgress?.('writing', done, total),
