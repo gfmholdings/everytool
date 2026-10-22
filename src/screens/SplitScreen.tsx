@@ -3,7 +3,8 @@ import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Card, Field, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
-import { formatMoney, splitBill, toCents } from '../lib/money';
+import { shareText } from '../lib/files';
+import { evenBillShareText, formatMoney, itemBillShareText, splitBill, toCents } from '../lib/money';
 import { linesFromBoxes, parseReceipt, splitByItems, type ReceiptItem } from '../lib/receipt';
 import { recognizeText } from '../store/sharedVault';
 import { colors, type } from '../theme';
@@ -272,6 +273,7 @@ export function SplitScreen({ onBack }: { onBack: () => void }) {
               <Text style={type.num}>{formatMoney(c)}</Text>
             </View>
           ))}
+          <GhostButton label="Share" onPress={() => void shareText(itemBillShareText(itemSplit.perPerson))} />
         </Card>
       )}
 
@@ -302,6 +304,19 @@ export function SplitScreen({ onBack }: { onBack: () => void }) {
         ) : (
           <Text style={type.body}>{formatMoney(result.sharesCents[0] ?? 0)} each</Text>
         )}
+        <GhostButton
+          label="Share"
+          onPress={() =>
+            void shareText(
+              evenBillShareText({
+                people,
+                tipCents: result.tipCents,
+                grandCents: result.grandCents,
+                sharesCents: result.sharesCents,
+              }),
+            )
+          }
+        />
       </Card>
       )}
     </ToolShell>

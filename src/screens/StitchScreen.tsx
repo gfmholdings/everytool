@@ -625,11 +625,16 @@ export function StitchScreen({
           <PrimaryButton label="Save to Photos" onPress={() => void save()} testID="stitch.save" />
           <GhostButton
             label="Share image"
-            onPress={() =>
-              void shareFile(result.uri, 'image/png').then((ok) => {
+            onPress={() => {
+              void (async () => {
+                const pending = pendingRender.current;
+                if (pending) await pending;
+                const current = resultRef.current;
+                if (!current) return;
+                const ok = await shareFile(current.uri, 'image/png');
                 if (!ok) setError('Sharing isn’t available here.');
-              })
-            }
+              })();
+            }}
           />
           {result.height <= COPY_MAX_HEIGHT && (
             <GhostButton label="Copy image" onPress={() => void copyImage()} />

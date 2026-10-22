@@ -17,6 +17,7 @@ import QRCode from 'react-native-qrcode-svg';
 
 import { Card, Field, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
 import { saveToPhotos, shareFile, tempFileUri } from '../lib/files';
+import { pngFileBase64 } from '../lib/shareSheet';
 import { checkLink } from '../lib/linkCheck';
 import {
   DEFAULT_QR_STYLE,
@@ -201,6 +202,7 @@ export function QrScreen({
               <QrFileActions
                 notify={notify}
                 copyLabel="Copy text"
+                subject={qrContentPreview(made)}
                 onCopy={() => void Clipboard.setStringAsync(made).then(() => notify('Copied'))}
                 file={() => qrFileFrom(qrRef.current)}
               />
@@ -356,6 +358,7 @@ function QrHistoryList({
         <QrFileActions
           notify={notify}
           copyLabel="Copy"
+          subject={qrContentPreview(open.payload)}
           onCopy={() => void Clipboard.setStringAsync(open.payload).then(() => notify('Copied'))}
           file={() => qrFileFrom(qrRef.current)}
         />
@@ -439,11 +442,14 @@ function QrMark({
 function QrFileActions({
   notify,
   copyLabel,
+  subject,
   onCopy,
   file,
 }: {
   notify: (msg: string) => void;
   copyLabel: string;
+  /** Mail subject only. The sheet item is the PNG file. */
+  subject?: string;
   onCopy: () => void;
   file: () => Promise<string | null>;
 }) {
@@ -455,8 +461,9 @@ function QrFileActions({
             label="Share"
             onPress={async () => {
               const uri = await file();
-              if (uri) await shareFile(uri, 'image/png');
-              else notify('Couldn’t render the QR code');
+              if (!uri) return notify('Couldn’t render the QR code');
+              const ok = await shareFile(uri, 'image/png', { subject });
+              if (!ok) notify('Sharing isn’t available here.');
             }}
           />
         </View>
@@ -485,7 +492,7 @@ function qrFileFrom(
     svg.toDataURL((b64) => {
       try {
         const uri = tempFileUri('png', 'qr');
-        new File(uri).write(b64, { encoding: 'base64' });
+        new File(uri).write(pngFileBase64(b64), { encoding: 'base64' });
         resolve(uri);
       } catch {
         resolve(null);

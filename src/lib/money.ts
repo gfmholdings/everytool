@@ -37,6 +37,44 @@ export function splitBill(
   return { totalCents, taxCents, tipCents, grandCents, sharesCents };
 }
 
+const PEOPLE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+/** Plain text for the native share sheet. Not a file. */
+export function evenBillShareText(input: {
+  people: number;
+  tipCents: number;
+  grandCents: number;
+  sharesCents: number[];
+}): string {
+  const lines = [
+    'Split bill',
+    `Total with tax and tip: ${formatMoney(input.grandCents)}`,
+    `Tip: ${formatMoney(input.tipCents)}`,
+  ];
+  const groups = new Map<number, number>();
+  for (const cents of input.sharesCents) groups.set(cents, (groups.get(cents) ?? 0) + 1);
+  if (groups.size <= 1) {
+    lines.push(`Each of ${input.people}: ${formatMoney(input.sharesCents[0] ?? 0)}`);
+  } else {
+    for (const [cents, count] of groups) {
+      lines.push(`${count} ${count === 1 ? 'person pays' : 'people pay'} ${formatMoney(cents)}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+/** Plain text for an itemized split. One line per person. */
+export function itemBillShareText(perPerson: number[]): string {
+  const lines = ['Split bill'];
+  let total = 0;
+  perPerson.forEach((cents, i) => {
+    total += cents;
+    lines.push(`Person ${PEOPLE[i] ?? i + 1} pays ${formatMoney(cents)}`);
+  });
+  lines.push(`Total: ${formatMoney(total)}`);
+  return lines.join('\n');
+}
+
 export function formatMoney(cents: number): string {
   const sign = cents < 0 ? '-' : '';
   const abs = Math.abs(cents);

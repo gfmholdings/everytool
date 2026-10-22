@@ -4,7 +4,6 @@ import {
   Alert,
   AppState as RNAppState,
   Pressable,
-  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -12,6 +11,7 @@ import {
 } from 'react-native';
 
 import { Card, Field, GhostButton, PrimaryButton, ToolShell } from '../components/ui';
+import { shareText } from '../lib/files';
 import { sortedClips, useStore } from '../store/AppStore';
 import { colors, type } from '../theme';
 import type { Clip } from '../types';
@@ -260,7 +260,7 @@ export function ClipboardScreen({
                 />
                 <Action
                   label="Share"
-                  onPress={() => void Share.share({ message: clip.text })}
+                  onPress={() => void shareText(clip.text)}
                 />
                 <Action label="Cut" onPress={() => void cut(clip)} />
                 <Action label="Delete" danger onPress={() => deleteClip(clip.id)} />
