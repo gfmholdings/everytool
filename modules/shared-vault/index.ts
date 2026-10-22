@@ -11,6 +11,14 @@ export interface SharedVaultNative {
   recognizeText(uri: string): Promise<{ text: string; x: number; y: number; width: number; height: number }[]>;
   stripLocation(inputUri: string, outputUri: string): boolean;
   imageHasLocation(uri: string): boolean;
+  reencodeImage?(
+    inputUri: string,
+    outputUri: string,
+    format: string,
+    quality: number,
+    maxWidth: number,
+    stripMetadata: boolean,
+  ): number;
   showBroadcastPicker(extensionBundleId: string): Promise<boolean>;
   requestNotificationPermission(): Promise<boolean>;
 }

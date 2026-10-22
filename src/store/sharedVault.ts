@@ -26,6 +26,14 @@ interface SharedVaultNative {
   recognizeText?(uri: string): Promise<TextBox[]>;
   stripLocation?(inputUri: string, outputUri: string): boolean;
   imageHasLocation?(uri: string): boolean;
+  reencodeImage?(
+    inputUri: string,
+    outputUri: string,
+    format: string,
+    quality: number,
+    maxWidth: number,
+    stripMetadata: boolean,
+  ): number;
   showBroadcastPicker?(extensionBundleId: string): Promise<boolean>;
   requestNotificationPermission?(): Promise<boolean>;
 }
@@ -164,6 +172,26 @@ export function stripLocation(inputUri: string, outputUri: string): boolean {
     return native?.stripLocation?.(inputUri, outputUri) ?? false;
   } catch {
     return false;
+  }
+}
+
+/**
+ * On-device re-encode (JPEG, PNG, or HEIC). Returns the byte size, or
+ * null when the native encoder isn't available or the format failed.
+ */
+export function reencodeImage(
+  inputUri: string,
+  outputUri: string,
+  format: 'jpeg' | 'png' | 'heic',
+  quality: number,
+  maxWidth: number,
+  stripMetadata: boolean,
+): number | null {
+  try {
+    const n = native?.reencodeImage?.(inputUri, outputUri, format, quality, maxWidth, stripMetadata);
+    return n == null || n < 0 ? null : n;
+  } catch {
+    return null;
   }
 }
 

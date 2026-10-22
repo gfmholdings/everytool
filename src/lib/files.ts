@@ -23,6 +23,7 @@ export function formatBytes(bytes: number): string {
 const UTI: Record<string, string> = {
   'image/png': 'public.png',
   'image/jpeg': 'public.jpeg',
+  'image/heic': 'public.heic',
   'image/gif': 'com.compuserve.gif',
   'application/pdf': 'com.adobe.pdf',
 };

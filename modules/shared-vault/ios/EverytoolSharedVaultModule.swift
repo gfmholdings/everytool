@@ -169,6 +169,74 @@ public class EverytoolSharedVaultModule: Module {
     }
     .runOnQueue(.main)
 
+    /// Re-encode a photo on device. `format` is jpeg, png, or heic.
+    /// `maxWidth` 0 keeps the pixel width. Quality is 0...1 (PNG ignores it).
+    /// Metadata (EXIF, GPS) is omitted when `stripMetadata` is true.
+    /// Returns the byte size, or -1 if the encode failed. No network.
+    Function("reencodeImage") {
+      (
+        inputUri: String,
+        outputUri: String,
+        format: String,
+        quality: Double,
+        maxWidth: Int,
+        stripMetadata: Bool
+      ) -> Int in
+      guard
+        let inURL = URL(string: inputUri),
+        let outURL = URL(string: outputUri),
+        let data = try? Data(contentsOf: inURL),
+        let image = UIImage(data: data)
+      else { return -1 }
+      let pixelW = max(1, Int((image.size.width * image.scale).rounded()))
+      let pixelH = max(1, Int((image.size.height * image.scale).rounded()))
+      let outW = maxWidth > 0 && maxWidth < pixelW ? maxWidth : pixelW
+      let outH = max(1, Int((Double(pixelH) * Double(outW) / Double(pixelW)).rounded()))
+      let rendererFormat = UIGraphicsImageRendererFormat()
+      rendererFormat.scale = 1
+      rendererFormat.opaque = format != "png"
+      let renderer = UIGraphicsImageRenderer(
+        size: CGSize(width: outW, height: outH),
+        format: rendererFormat
+      )
+      let drawn = renderer.image { _ in
+        image.draw(in: CGRect(x: 0, y: 0, width: outW, height: outH))
+      }
+      guard let cg = drawn.cgImage else { return -1 }
+      let uti: CFString
+      switch format {
+      case "png": uti = "public.png" as CFString
+      case "heic": uti = "public.heic" as CFString
+      default: uti = "public.jpeg" as CFString
+      }
+      let encoded = NSMutableData()
+      guard let dest = CGImageDestinationCreateWithData(encoded, uti, 1, nil) else {
+        return -1
+      }
+      var props: [CFString: Any] = [
+        kCGImageDestinationLossyCompressionQuality: min(1, max(0, quality)),
+      ]
+      if !stripMetadata,
+        let source = CGImageSourceCreateWithURL(inURL as CFURL, nil),
+        let original = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] {
+        for (key, value) in original { props[key] = value }
+        // The draw above already baked orientation, so the tag must say "up".
+        props[kCGImagePropertyOrientation] = 1
+        props[kCGImageDestinationLossyCompressionQuality] = min(1, max(0, quality))
+      }
+      CGImageDestinationAddImage(dest, cg, props as CFDictionary)
+      guard CGImageDestinationFinalize(dest) else { return -1 }
+      do {
+        if FileManager.default.fileExists(atPath: outURL.path) {
+          try FileManager.default.removeItem(at: outURL)
+        }
+        try encoded.write(to: outURL, options: .atomic)
+      } catch {
+        return -1
+      }
+      return encoded.length
+    }
+
     /// Lets the broadcast extension post "Your long screenshot is ready"
     /// when the recording stops. Optional — stitching works without it.
     AsyncFunction("requestNotificationPermission") { () async -> Bool in
