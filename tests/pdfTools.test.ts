@@ -4,6 +4,8 @@ import test from 'node:test';
 
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 
+import { parseSizeTarget, SIZE_CHIPS } from '../src/lib/resizePlan.ts';
+
 import {
   COMPRESS_PRESETS,
   OFFICE_TO_PDF,
@@ -22,7 +24,15 @@ import {
   pageFrame,
   pdfIsEncrypted,
   plainTextToRtf,
+  PDF_DPI_LADDER,
+  PDF_QUALITY_FLOOR,
+  PDF_QUALITY_LADDER,
+  PDF_TARGET_CHIPS,
+  parsePdfTarget,
+  pdfLongSideAtDpi,
+  pdfTargetSteps,
   planCompressTarget,
+  planPdfTarget,
   protectRequest,
   rasterPixels,
   rasterPlan,
@@ -200,6 +210,98 @@ test('compress levels and a target size: high is smaller settings, the target ke
     saved: 1_760_000,
     shrunk: true,
   });
+});
+
+test('pdf target size: chips match Resize, and the loop stops at the first readable step', () => {
+  assert.deepEqual(
+    PDF_TARGET_CHIPS.map((chip) => chip.bytes),
+    [500 * 1024, 1024 * 1024, 2 * 1024 * 1024, 5 * 1024 * 1024, 10 * 1024 * 1024, 20 * 1024 * 1024, 25 * 1024 * 1024],
+  );
+  for (const chip of PDF_TARGET_CHIPS) {
+    const same = SIZE_CHIPS.find((item) => item.id === chip.id);
+    assert.ok(same, chip.id);
+    assert.equal(same!.bytes, chip.bytes);
+    assert.equal(same!.label, chip.label);
+  }
+  assert.equal(parsePdfTarget('1,5', 'MB'), parseSizeTarget('1,5', 'MB'));
+  assert.equal(parsePdfTarget('0', 'KB'), null);
+  assert.equal(parsePdfTarget('250', 'MB'), null);
+  assert.deepEqual(PDF_DPI_LADDER, [300, 150, 100, 72]);
+  assert.equal(PDF_QUALITY_FLOOR, 0.4);
+  assert.equal(pdfLongSideAtDpi(300), 3300);
+  assert.equal(pdfLongSideAtDpi(72), 792);
+  const steps = pdfTargetSteps();
+  assert.equal(steps.length, PDF_DPI_LADDER.length * PDF_QUALITY_LADDER.length);
+  assert.deepEqual(steps[0], { dpi: 300, quality: 0.85, maxLongSide: 3300 });
+  assert.deepEqual(steps[3], { dpi: 300, quality: 0.4, maxLongSide: 3300 });
+  assert.deepEqual(steps[4], { dpi: 150, quality: 0.85, maxLongSide: 1650 });
+  assert.deepEqual(steps.at(-1), { dpi: 72, quality: 0.4, maxLongSide: 792 });
+
+  const already = planPdfTarget({
+    beforeBytes: 240 * 1024,
+    maxBytes: 1024 * 1024,
+    measure: () => {
+      throw new Error('measure');
+    },
+  });
+  assert.equal(already.action, 'noop');
+  assert.equal(already.after, 240 * 1024);
+  assert.equal(already.text, 'kept');
+  assert.match(already.message, /Already 240 KB, under 1 MB/);
+  assert.match(already.message, /Left as it is/);
+  assert.match(
+    planPdfTarget({ beforeBytes: 1024 * 1024, maxBytes: 1024 * 1024, measure: () => 1 }).message,
+    /Already 1 MB\. Left as it is/,
+  );
+
+  let calls = 0;
+  const fitted = planPdfTarget({
+    beforeBytes: 3 * 1024 * 1024,
+    maxBytes: 500 * 1024,
+    measure: (step) => {
+      calls += 1;
+      if (step.dpi === 150 && step.quality <= 0.72) return 400 * 1024;
+      return 2 * 1024 * 1024;
+    },
+  });
+  assert.equal(calls, 6);
+  assert.equal(fitted.action, 'compress');
+  assert.equal(fitted.dpi, 150);
+  assert.equal(fitted.quality, 0.72);
+  assert.equal(fitted.maxLongSide, 1650);
+  assert.equal(fitted.unmet, false);
+  assert.equal(fitted.after, 400 * 1024);
+  assert.match(fitted.message, /3 MB is now 400 KB/);
+  assert.match(fitted.message, /text is unchanged/);
+
+  let all = 0;
+  const stuck = planPdfTarget({
+    beforeBytes: 8 * 1024 * 1024,
+    maxBytes: 500 * 1024,
+    measure: (step) => {
+      all += 1;
+      return step.dpi === 72 && step.quality === 0.4 ? Math.round(1.2 * 1024 * 1024) : 3 * 1024 * 1024;
+    },
+  });
+  assert.equal(all, steps.length);
+  assert.equal(stuck.action, 'smallest');
+  assert.equal(stuck.unmet, true);
+  assert.equal(stuck.dpi, 72);
+  assert.equal(stuck.quality, 0.4);
+  assert.equal(stuck.after, Math.round(1.2 * 1024 * 1024));
+  assert.match(stuck.message, /Cannot get under 500 KB/);
+  assert.match(stuck.message, /Smallest is 1\.2 MB/);
+  assert.match(stuck.message, /text is unchanged/);
+
+  const unsqueezable = planPdfTarget({
+    beforeBytes: 4 * 1024 * 1024,
+    maxBytes: 500 * 1024,
+    measure: () => 5 * 1024 * 1024,
+  });
+  assert.equal(unsqueezable.action, 'smallest');
+  assert.equal(unsqueezable.after, 4 * 1024 * 1024);
+  assert.match(unsqueezable.message, /Smallest is 4 MB/);
+  assert.throws(() => planPdfTarget({ beforeBytes: 100, maxBytes: 0, measure: () => 1 }), /target size/);
 });
 
 test('protect and unlock stay on PDFKit, and a normal file is not encrypted', async () => {

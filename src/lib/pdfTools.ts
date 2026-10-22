@@ -35,6 +35,33 @@ export const COMPRESS_PRESETS: Record<CompressLevel, { quality: number; maxLongS
 const QUALITY_STEPS = [0.85, 0.72, 0.55, 0.38];
 const SIDE_STEPS = [2400, 1600, 1100, 800];
 
+/**
+ * Upload limits. Resize offers these same chips once a photo is past the
+ * small portal sizes (50 KB, 100 KB, 200 KB), which stay on that screen.
+ * The byte values match SIZE_CHIPS in src/lib/resizePlan.ts.
+ */
+export const PDF_TARGET_CHIPS = [
+  { id: '500kb', label: '500 KB', bytes: 500 * 1024 },
+  { id: '1mb', label: '1 MB', bytes: 1024 * 1024 },
+  { id: '2mb', label: '2 MB', bytes: 2 * 1024 * 1024 },
+  { id: '5mb', label: '5 MB', bytes: 5 * 1024 * 1024 },
+  { id: '10mb', label: '10 MB', bytes: 10 * 1024 * 1024 },
+  { id: '20mb', label: '20 MB', bytes: 20 * 1024 * 1024 },
+  { id: '25mb', label: '25 MB', bytes: 25 * 1024 * 1024 },
+] as const;
+
+/** Gentlest first. Quality drops before resolution, and 0.4 at 72 DPI is the last readable step. */
+export const PDF_DPI_LADDER = [300, 150, 100, 72] as const;
+export const PDF_QUALITY_LADDER = [0.85, 0.72, 0.55, 0.4] as const;
+/** Below this, photos are treated as too far gone to offer. */
+export const PDF_QUALITY_FLOOR = 0.4;
+
+/** Long side, in pixels, of an 11-inch page at `dpi`. Images are never upscaled to reach it. */
+export function pdfLongSideAtDpi(dpi: number): number {
+  if (!Number.isFinite(dpi) || dpi < 36 || dpi > 600) throw new Error('Choose a DPI from 36 to 600.');
+  return Math.round(11 * dpi);
+}
+
 export type ToolStatus = 'in-app' | 'partial' | 'groundwork' | 'device' | 'not-feasible';
 
 export interface PdfHubItem {
@@ -484,6 +511,132 @@ export function planCompressTarget(
   if (best) return best;
   if (!smallest) throw new Error('Enter a target size.');
   return { ...smallest, unmet: true };
+}
+
+export type PdfTargetAction = 'noop' | 'compress' | 'smallest';
+
+export interface PdfTargetStep {
+  dpi: number;
+  quality: number;
+  maxLongSide: number;
+}
+
+export interface PdfTargetPlan {
+  action: PdfTargetAction;
+  dpi: number | null;
+  quality: number | null;
+  maxLongSide: number | null;
+  before: number;
+  after: number;
+  saved: number;
+  unmet: boolean;
+  message: string;
+  /** Embedded photos change. Text, fonts, and vector drawing do not. */
+  text: 'kept';
+}
+
+/** Steps the phone tries, in order, until the file is under the chip. */
+export function pdfTargetSteps(): PdfTargetStep[] {
+  const steps: PdfTargetStep[] = [];
+  for (const dpi of PDF_DPI_LADDER) {
+    for (const quality of PDF_QUALITY_LADDER) {
+      steps.push({ dpi, quality, maxLongSide: pdfLongSideAtDpi(dpi) });
+    }
+  }
+  return steps;
+}
+
+export function parsePdfTarget(amount: string, unit: 'KB' | 'MB'): number | null {
+  const n = Number(amount.trim().replace(',', '.'));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const bytes = unit === 'MB' ? n * 1024 * 1024 : n * 1024;
+  if (bytes > 200 * 1024 * 1024) return null;
+  return Math.round(bytes);
+}
+
+function formatBytes(bytes: number): string {
+  const mb = 1024 * 1024;
+  if (bytes >= mb) {
+    const n = bytes / mb;
+    const whole = Math.abs(n - Math.round(n)) < 0.05;
+    const shown = whole || n >= 10 ? String(Math.round(n)) : String(Math.round(n * 10) / 10);
+    return `${shown} MB`;
+  }
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/**
+ * Lower JPEG quality, then DPI 300 → 150 → 100 → 72, until `measure`
+ * reports a file under `maxBytes`. `measure` is the on-device re-encode
+ * of embedded photos only. Text is never part of the attempt.
+ * A file already at or under the chip is returned unchanged.
+ * When the floor is still over the chip, the smallest try is offered.
+ */
+export function planPdfTarget(input: {
+  beforeBytes: number;
+  maxBytes: number;
+  measure: (step: PdfTargetStep) => number;
+}): PdfTargetPlan {
+  const before = Math.round(input.beforeBytes);
+  const maxBytes = Math.round(input.maxBytes);
+  if (!Number.isFinite(before) || before < 1) throw new Error('This PDF is empty.');
+  if (!Number.isFinite(maxBytes) || maxBytes < 1) throw new Error('Enter a target size.');
+  const limit = formatBytes(maxBytes);
+  if (before <= maxBytes) {
+    const message =
+      before === maxBytes
+        ? `Already ${formatBytes(before)}. Left as it is.`
+        : `Already ${formatBytes(before)}, under ${limit}. Left as it is.`;
+    return {
+      action: 'noop',
+      dpi: null,
+      quality: null,
+      maxLongSide: null,
+      before,
+      after: before,
+      saved: 0,
+      unmet: false,
+      message,
+      text: 'kept',
+    };
+  }
+  let chosen: PdfTargetPlan | null = null;
+  let smallest: { step: PdfTargetStep; bytes: number } | null = null;
+  for (const step of pdfTargetSteps()) {
+    const raw = input.measure(step);
+    const bytes = Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : before;
+    if (bytes < before && (!smallest || bytes < smallest.bytes)) smallest = { step, bytes };
+    if (bytes <= maxBytes && bytes < before) {
+      chosen = {
+        action: 'compress',
+        dpi: step.dpi,
+        quality: step.quality,
+        maxLongSide: step.maxLongSide,
+        before,
+        after: bytes,
+        saved: before - bytes,
+        unmet: false,
+        message: `${formatBytes(before)} is now ${formatBytes(bytes)}. The text is unchanged.`,
+        text: 'kept',
+      };
+      break;
+    }
+  }
+  if (chosen) return chosen;
+  const after = smallest ? smallest.bytes : before;
+  const step = smallest?.step ?? null;
+  return {
+    action: 'smallest',
+    dpi: step?.dpi ?? null,
+    quality: step?.quality ?? null,
+    maxLongSide: step?.maxLongSide ?? null,
+    before,
+    after,
+    saved: Math.max(0, before - after),
+    unmet: true,
+    message: `Cannot get under ${limit} without making the photos hard to read. Smallest is ${formatBytes(after)}. The text is unchanged.`,
+    text: 'kept',
+  };
 }
 
 export function sizeChange(before: number, after: number): { before: number; after: number; saved: number; shrunk: boolean } {

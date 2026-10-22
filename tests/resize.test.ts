@@ -27,7 +27,18 @@ function qualityBytes(step: FitStep): number {
 test('size chips and passport limits are the portal numbers', () => {
   assert.deepEqual(
     SIZE_CHIPS.map((c) => c.bytes),
-    [50 * 1024, 100 * 1024, 200 * 1024, 500 * 1024, 1024 * 1024, 2 * 1024 * 1024],
+    [
+      50 * 1024,
+      100 * 1024,
+      200 * 1024,
+      500 * 1024,
+      1024 * 1024,
+      2 * 1024 * 1024,
+      5 * 1024 * 1024,
+      10 * 1024 * 1024,
+      20 * 1024 * 1024,
+      25 * 1024 * 1024,
+    ],
   );
   assert.equal(PASSPORT_LIMITS[0]!.bytes, 240 * 1024);
   assert.equal(PASSPORT_LIMITS[0]!.note.includes('under 240 KB'), true);

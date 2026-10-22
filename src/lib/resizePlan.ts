@@ -10,6 +10,11 @@ export const MIN_LONG_SIDE = 160;
 export type ResizeFormat = 'jpeg' | 'png' | 'heic';
 export type SizeUnit = 'KB' | 'MB';
 
+/**
+ * Portal sizes first, then the same upload limits PDF compress offers
+ * from 500 KB through 25 MB (PDF_TARGET_CHIPS). A 50 KB photo chip is
+ * not a useful PDF target, so it stays only on this list.
+ */
 export const SIZE_CHIPS = [
   { id: '50kb', label: '50 KB', bytes: 50 * 1024 },
   { id: '100kb', label: '100 KB', bytes: 100 * 1024 },
@@ -17,6 +22,10 @@ export const SIZE_CHIPS = [
   { id: '500kb', label: '500 KB', bytes: 500 * 1024 },
   { id: '1mb', label: '1 MB', bytes: 1024 * 1024 },
   { id: '2mb', label: '2 MB', bytes: 2 * 1024 * 1024 },
+  { id: '5mb', label: '5 MB', bytes: 5 * 1024 * 1024 },
+  { id: '10mb', label: '10 MB', bytes: 10 * 1024 * 1024 },
+  { id: '20mb', label: '20 MB', bytes: 20 * 1024 * 1024 },
+  { id: '25mb', label: '25 MB', bytes: 25 * 1024 * 1024 },
 ] as const;
 
 /** Portal file-size limits shown next to the dimension presets. */
