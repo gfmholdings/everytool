@@ -69,9 +69,23 @@ final class KeyboardViewController: UIInputViewController {
       rootStack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 4),
       rootStack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -4),
       rootStack.topAnchor.constraint(equalTo: view.topAnchor, constant: 6),
-      rootStack.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -4),
     ])
-    let h = view.heightAnchor.constraint(equalToConstant: 284)
+    // A low-priority bottom pin guides the self-sizing without ever
+    // fighting the system (see the height note below).
+    let bottomPin = rootStack.bottomAnchor.constraint(
+      equalTo: view.bottomAnchor, constant: -4)
+    bottomPin.priority = .defaultLow
+    bottomPin.isActive = true
+    // The keyboard's height lives on the container, never on the input
+    // view itself. iOS installs its own sizing constraints on the input
+    // view while presenting it; required edge pins plus a height on the
+    // view fight them, and on iOS 26/27 that throws a mutually-exclusive
+    // constraint exception — the extension aborts inside viewDidLoad
+    // and iOS silently falls back to the system keyboard (device crash
+    // logs 2026-11-07 build 12 and 2026-11-10 build 1001). The input
+    // view self-sizes from the container: top pin + this height.
+    // Constants are the old view heights minus the 6 + 4 insets.
+    let h = rootStack.heightAnchor.constraint(equalToConstant: 274)
     h.priority = .defaultHigh
     h.isActive = true
     heightConstraint = h
@@ -184,13 +198,13 @@ final class KeyboardViewController: UIInputViewController {
     content.subviews.forEach { $0.removeFromSuperview() }
     switch t {
     case .keys:
-      heightConstraint?.constant = editor == nil ? 284 : 344
+      heightConstraint?.constant = editor == nil ? 274 : 334
       buildKeys()
     case .clipboard:
-      heightConstraint?.constant = 330
+      heightConstraint?.constant = 320
       buildClipboard()
     case .text:
-      heightConstraint?.constant = 330
+      heightConstraint?.constant = 320
       buildTextTools()
     }
   }
@@ -337,6 +351,9 @@ final class KeyboardViewController: UIInputViewController {
       bottomKeys.append(g)
       globe = g
     }
+    let up = makeKey("▲", special: true, fontSize: 13)
+    up.accessibilityLabel = "Move cursor up"
+    up.addTarget(self, action: #selector(cursorUp), for: .touchUpInside)
     let left = makeKey("◀︎", special: true, fontSize: 14)
     left.accessibilityLabel = "Move cursor left"
     left.addTarget(self, action: #selector(cursorLeft), for: .touchUpInside)
@@ -345,19 +362,24 @@ final class KeyboardViewController: UIInputViewController {
     let right = makeKey("▶︎", special: true, fontSize: 14)
     right.accessibilityLabel = "Move cursor right"
     right.addTarget(self, action: #selector(cursorRight), for: .touchUpInside)
+    let down = makeKey("▼", special: true, fontSize: 13)
+    down.accessibilityLabel = "Move cursor down"
+    down.addTarget(self, action: #selector(cursorDown), for: .touchUpInside)
     let ret = makeKey(editor == nil ? "return" : "⏎", special: true, fontSize: 16)
     ret.addTarget(self, action: #selector(returnTapped), for: .touchUpInside)
-    bottomKeys += [left, space, right, ret]
+    bottomKeys += [up, left, space, right, down, ret]
 
     let bottom = UIStackView(arrangedSubviews: bottomKeys)
     bottom.axis = .horizontal
     bottom.spacing = 5
     bottom.distribution = .fill
-    toggle.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.13).isActive = true
-    globe?.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.1).isActive = true
-    left.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.09).isActive = true
-    right.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.09).isActive = true
-    ret.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.16).isActive = true
+    toggle.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.11).isActive = true
+    globe?.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.08).isActive = true
+    up.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.07).isActive = true
+    left.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.07).isActive = true
+    right.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.07).isActive = true
+    down.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.07).isActive = true
+    ret.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.14).isActive = true
     stack.addArrangedSubview(bottom)
   }
 
@@ -482,6 +504,50 @@ final class KeyboardViewController: UIInputViewController {
 
   @objc private func cursorRight() {
     if editor == nil { textDocumentProxy.adjustTextPosition(byCharacterOffset: 1) }
+  }
+
+  @objc private func cursorUp() {
+    moveCursorVertically(down: false)
+  }
+
+  @objc private func cursorDown() {
+    moveCursorVertically(down: true)
+  }
+
+  /// Up/down have no proxy API: derive the offset from the text around
+  /// the cursor — cross one newline and land in the same column of the
+  /// neighbouring line (or the closest spot that line offers). Apple's
+  /// own keyboard has no arrow keys at all; these are ours.
+  private func moveCursorVertically(down: Bool) {
+    guard editor == nil else { return }
+    let proxy = textDocumentProxy
+    if let selected = proxy.selectedText, !selected.isEmpty {
+      // Collapse the selection to its near edge first.
+      proxy.adjustTextPosition(byCharacterOffset: down ? selected.count : -selected.count)
+      return
+    }
+    let before = proxy.documentContextBeforeInput ?? ""
+    let after = proxy.documentContextAfterInput ?? ""
+    if down {
+      let lines = after.components(separatedBy: "\n")
+      guard lines.count > 1 else {
+        proxy.adjustTextPosition(byCharacterOffset: after.count)
+        return
+      }
+      let column = before.components(separatedBy: "\n").last?.count ?? 0
+      let offset = (lines[0].count + 1) + min(column, lines[1].count)
+      proxy.adjustTextPosition(byCharacterOffset: offset)
+    } else {
+      let lines = before.components(separatedBy: "\n")
+      guard lines.count > 1 else {
+        proxy.adjustTextPosition(byCharacterOffset: -before.count)
+        return
+      }
+      let column = lines[lines.count - 1].count
+      let previous = lines[lines.count - 2]
+      let offset = (column + 1) + (previous.count - min(column, previous.count))
+      proxy.adjustTextPosition(byCharacterOffset: -offset)
+    }
   }
 
   private func loadSnippets() {
