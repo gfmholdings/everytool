@@ -1,0 +1,11 @@
+appId: app.everytool.ios
+name: A new share replaces shots in an already-open stitcher
+---
+- openLink: "everytool://tool/stitch"
+- tapOn:
+    text: "Open"
+    optional: true
+- extendedWaitUntil:
+    visible: "Stitch 2 shots"
+    timeout: 20000
+- assertNotVisible: "Your long screenshot"

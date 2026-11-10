@@ -1,0 +1,12 @@
+appId: app.everytool.ios
+name: A new share replaces the source in an already-open converter
+---
+- openLink: "everytool://tool/convert"
+- tapOn:
+    text: "Open"
+    optional: true
+- extendedWaitUntil:
+    visible: "1170 × 2532"
+    timeout: 20000
+- assertNotVisible: "2400 × 1800"
+- assertNotVisible: "Done"

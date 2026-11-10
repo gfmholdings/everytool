@@ -33,25 +33,19 @@ export function checkLink(raw: string): LinkCheck {
     return { kind: 'other', host: null, warnings, risky: warnings.length > 0 };
   }
 
-  const m = /^https?:\/\/([^/?#]*)/i.exec(text);
-  const authority = m?.[1] ?? '';
   const warnings: string[] = [];
-  let hostPort = authority;
-  if (authority.includes('@')) {
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return { kind: 'other', host: null, warnings: ['This website address is invalid. Copy it instead of opening it.'], risky: true };
+  }
+  if (url.username || url.password) {
     warnings.push('The part before “@” is a disguise — the link really goes to the address after it.');
-    hostPort = authority.slice(authority.lastIndexOf('@') + 1);
   }
-  let host = hostPort;
-  let port = '';
-  const ipv6 = /^\[([^\]]+)\](?::(\d+))?$/.exec(hostPort);
-  if (ipv6) {
-    host = ipv6[1]!;
-    port = ipv6[2] ?? '';
-  } else if (/:\d+$/.test(hostPort)) {
-    port = hostPort.slice(hostPort.lastIndexOf(':') + 1);
-    host = hostPort.slice(0, hostPort.lastIndexOf(':'));
-  }
-  host = host.toLowerCase().replace(/\.$/, '');
+  const host = url.hostname.toLowerCase().replace(/\.$/, '');
+  const port = url.port;
+  const ipv6 = host.startsWith('[');
 
   if (scheme === 'http') warnings.push('Not secure (http) — anything you type can be read on the way.');
   if (!host) warnings.push('This link has no website address.');

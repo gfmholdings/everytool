@@ -59,15 +59,21 @@ run_flow "QR: make/copy/share/history" 06_qr.yaml
 
 "$INJECT" share convert image "$FX/photo.png"
 run_flow "Convert: shared photo → JPG/PDF, save" 07_convert_shared.yaml
+check "Inject another photo while Convert is open" "$INJECT" share convert image "$FX/shots/shot-1.png"
+run_flow "Convert: replace a shared photo while already open" 07b_convert_warm_share.yaml
 
 "$INJECT" share resize image "$FX/photo.png"
 run_flow "Resize: shared photo measured + resized, save" 08_resize_shared.yaml
 
 "$INJECT" share pdf pdf "$FX/doc.pdf"
 run_flow "PDF: split + compress a shared PDF" 09_pdf_shared.yaml
+check "Inject two PDFs while PDF tools is open" "$INJECT" share pdf pdf "$FX/doc.pdf" "$FX/doc.pdf"
+run_flow "PDF: warm share retains both PDFs and merges all six pages" 09b_pdf_warm_batch.yaml
 
 "$INJECT" share stitch image "$FX/shots/shot-1.png" "$FX/shots/shot-2.png" "$FX/shots/shot-3.png"
 run_flow "Long screenshot: 3 screenshots → stitch, save, share" 10_stitch_photos_shared.yaml
+check "Inject another batch while Stitch is open" "$INJECT" share stitch image "$FX/shots/shot-1.png" "$FX/shots/shot-2.png"
+run_flow "Long screenshot: replace the shots while already open" 10b_stitch_warm_share.yaml
 
 "$INJECT" broadcast "$FX/frames"
 run_flow "Long screenshot: finished recording auto-opens + stitches, save, copy" 11_stitch_recording.yaml

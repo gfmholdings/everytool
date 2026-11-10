@@ -106,6 +106,12 @@ export function sameState(a: AppState, b: AppState): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+/** Existing shared state is authoritative, including deletions and empty lists.
+ * Only migrate the local fallback when no shared document exists. */
+export function startupState(shared: AppState | null, local: AppState | null): AppState {
+  return shared ?? local ?? { clips: [], qrHistory: [], countdowns: [] };
+}
+
 // ---- Snippets --------------------------------------------------------------
 // A clip can carry a shortcut word ("addr"). In the Everytool keyboard,
 // typing that word and then space replaces it with the clip's text. The

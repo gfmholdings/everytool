@@ -20,6 +20,7 @@ import { File } from 'expo-file-system';
 import { ToolGlyph } from './src/components/ui';
 import { drainShareInbox, readBroadcastInbox } from './src/lib/incoming';
 import type { ShotInput } from './src/lib/stitch';
+import { sharedPdfSources } from './src/lib/shareRouting';
 import { ClipboardScreen } from './src/screens/ClipboardScreen';
 import { ConvertScreen } from './src/screens/ConvertScreen';
 import { DaysScreen } from './src/screens/DaysScreen';
@@ -38,7 +39,7 @@ import { TOOLS, type ToolId } from './src/types';
 interface Pending {
   tool: ToolId;
   image?: { uri: string; width: number; height: number };
-  pdf?: { uri: string; name: string };
+  pdfs?: { uri: string; name: string }[];
   stitchShots?: ShotInput[];
   text?: string;
   autoRecord?: boolean;
@@ -74,9 +75,6 @@ function Root() {
   const { ready, addClip } = useStore();
   const [tool, setTool] = useState<ToolId | null>(null);
   const toolRef = useRef<ToolId | null>(null);
-  useEffect(() => {
-    toolRef.current = tool;
-  }, [tool]);
   const [pending, setPending] = useState<Pending | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [toastAnim] = useState(() => new Animated.Value(0));
@@ -102,8 +100,10 @@ function Root() {
     [toastAnim],
   );
 
+  const requestSequence = useRef(0);
   const openTool = useCallback((id: ToolId, p?: Omit<Pending, 'tool'>) => {
-    setPending(p ? { tool: id, ...p, recordNonce: Date.now() } : null);
+    toolRef.current = id;
+    setPending(p ? { tool: id, ...p, recordNonce: ++requestSequence.current } : null);
     setTool(id);
   }, []);
 
@@ -117,7 +117,9 @@ function Root() {
     draining.current = true;
     try {
       const items = await drainShareInbox();
-      const first = items[0];
+      // Match the share extension's route priority for mixed batches.
+      const first = items.find((x) => x.item.kind === 'text')
+        ?? items.find((x) => x.item.kind === 'pdf') ?? items[0];
       if (!first) return false;
       const { item, uri } = first;
       if (item.kind === 'text') {
@@ -135,7 +137,7 @@ function Root() {
         return true;
       }
       if (item.kind === 'pdf') {
-        openTool('pdf', { pdf: { uri, name: item.file } });
+        openTool('pdf', { pdfs: sharedPdfSources(items) });
       } else if (item.tool === 'stitch') {
         openTool('stitch', {
           stitchShots: items
@@ -182,7 +184,12 @@ function Root() {
       void drainAndRoute().then((routed) => {
         if (routed) return;
         const target = parseToolRef(ref);
-        if (target) openTool(target.id, requestFor(target));
+        if (target) {
+          // Activation may already have consumed this share before its
+          // URL arrives. Keep the loaded input on an ordinary same-tool URL.
+          if (target.id === toolRef.current && !target.record && !target.session) return;
+          openTool(target.id, requestFor(target));
+        }
       });
     };
     const sub = Linking.addEventListener('url', ({ url }) => handle(url));
@@ -229,6 +236,7 @@ function Root() {
   }
 
   const back = () => {
+    toolRef.current = null;
     setTool(null);
     setPending(null);
   };
@@ -238,6 +246,7 @@ function Root() {
     case 'stitch':
       screen = (
         <StitchScreen
+          key={pending?.recordNonce ?? 'stitch'}
           onBack={back}
           initialShots={pending?.stitchShots}
           recordRequest={pending?.autoRecord ? pending.recordNonce : undefined}
@@ -252,6 +261,7 @@ function Root() {
     case 'convert':
       screen = (
         <ConvertScreen
+          key={pending?.recordNonce ?? 'convert'}
           onBack={back}
           initialSource={pending?.image}
           notify={notify}
@@ -271,7 +281,7 @@ function Root() {
       );
       break;
     case 'pdf':
-      screen = <PdfScreen onBack={back} initialPdf={pending?.pdf} notify={notify} />;
+      screen = <PdfScreen key={pending?.recordNonce ?? 'pdf'} onBack={back} initialPdfs={pending?.pdfs} notify={notify} />;
       break;
     case 'text':
       screen = <TextScreen onBack={back} notify={notify} />;

@@ -53,6 +53,9 @@ final class KeyboardViewController: UIInputViewController {
   private var heightConstraint: NSLayoutConstraint?
   private var deleteTimer: Timer?
   private var toastTimer: Timer?
+  private var vaultRefreshTimer: Timer?
+  private var displayedVault: String?
+  private var displayedFullAccess = false
 
   // MARK: - Lifecycle
 
@@ -100,12 +103,25 @@ final class KeyboardViewController: UIInputViewController {
     loadSnippets()
     // Refresh whichever tab is showing: clips may have changed in the app.
     showTab(currentTab)
+    vaultRefreshTimer?.invalidate()
+    vaultRefreshTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+      guard let self, self.currentTab == .clipboard else { return }
+      // Poll only our saved vault, not the system pasteboard. Rebuilding
+      // on every tick would reset scrolling and repeatedly read the clipboard.
+      let json = self.hasFullAccess
+        ? SharedVault.defaults?.string(forKey: SharedVault.stateKey) : nil
+      if self.hasFullAccess != self.displayedFullAccess || json != self.displayedVault {
+        self.showTab(.clipboard)
+      }
+    }
   }
 
   override func viewWillDisappear(_ animated: Bool) {
     super.viewWillDisappear(animated)
     deleteTimer?.invalidate()
     deleteTimer = nil
+    vaultRefreshTimer?.invalidate()
+    vaultRefreshTimer = nil
   }
 
   override func textDidChange(_ textInput: UITextInput?) {
@@ -566,6 +582,9 @@ final class KeyboardViewController: UIInputViewController {
   }
 
   private func buildClipboard() {
+    displayedFullAccess = hasFullAccess
+    displayedVault = hasFullAccess
+      ? SharedVault.defaults?.string(forKey: SharedVault.stateKey) : nil
     rowTexts.removeAll()
     rowIds.removeAll()
     let outer = UIStackView()
@@ -614,6 +633,7 @@ final class KeyboardViewController: UIInputViewController {
       let label = UILabel()
       label.text =
         "Turn on Allow Full Access (Settings → General → Keyboard → Keyboards → Everytool) to paste, copy, cut and keep clips here. Typing works either way."
+      label.accessibilityIdentifier = "kb.fullAccessRequired"
       label.font = .systemFont(ofSize: 14)
       label.textColor = .secondaryLabel
       label.numberOfLines = 0

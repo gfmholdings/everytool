@@ -99,14 +99,9 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       }
       const shared = readSharedState();
       if (cancelled) return;
-      if (shared) {
-        // Carry over anything only the local copy has (clips saved by a
-        // build whose shared vault wasn't linked), then publish it.
-        const merged = local ? ops.mergeStates(shared, local) : shared;
-        apply(merged, !ops.sameState(merged, shared));
-      } else if (local) {
-        apply(local, true);
-      }
+      // A local backup can predate keyboard deletions. Never merge it into
+      // an existing shared document on launch, or deleted clips reappear.
+      apply(ops.startupState(shared, local), shared === null);
       setReady(true);
     })();
     return () => {

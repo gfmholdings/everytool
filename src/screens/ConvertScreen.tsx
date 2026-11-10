@@ -8,17 +8,13 @@ import { Card, GhostButton, PrimaryButton, Segmented, ToolShell } from '../compo
 import { formatBytes, measureImage, saveToPhotos, shareFile, tempFileUri } from '../lib/files';
 import { mergePdfSources, pdfSourceFromUri, type PdfSource } from '../lib/pdf';
 import { imageHasLocation, stripLocation } from '../store/sharedVault';
+import { measureSources, type ImageSource } from '../lib/imageSources';
 import { colors, type } from '../theme';
 
 /** jpg/png re-encode; pdf combines; "clean" keeps the photo as-is minus location. */
 type Format = 'jpg' | 'png' | 'pdf' | 'clean';
 
-interface Source {
-  uri: string;
-  name?: string;
-  width: number;
-  height: number;
-}
+type Source = ImageSource;
 
 interface Output {
   uri: string;
@@ -70,15 +66,16 @@ export function ConvertScreen({
 
   // Files from the share sheet arrive without a size; measure them.
   useEffect(() => {
-    const unknown = sources.filter((x) => x.width <= 0 || x.height <= 0);
+    const unknown = sources.filter((x) => !x.measurementFailed && (x.width <= 0 || x.height <= 0));
     if (unknown.length === 0) return;
     let live = true;
-    void Promise.all(
-      sources.map(async (x) =>
-        x.width > 0 && x.height > 0 ? x : { ...x, ...(await measureImage(x.uri)) },
-      ),
-    ).then((measured) => {
-      if (live) setSources(measured);
+    void measureSources(sources, measureImage).then((measured) => {
+      if (live) {
+        setSources(measured);
+        if (measured.some((x) => x.measurementFailed)) {
+          setError('One of these photos couldn’t be read. Pick the photos again.');
+        }
+      }
     });
     return () => {
       live = false;
@@ -234,7 +231,7 @@ export function ConvertScreen({
         <PrimaryButton
           label={busy ? 'Working…' : label}
           onPress={() => void convert()}
-          disabled={busy}
+          disabled={busy || sources.some((x) => x.measurementFailed)}
           orange
           testID="convert.run"
         />

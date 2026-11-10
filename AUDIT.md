@@ -1,4 +1,54 @@
-# Everytool regression audit (Oct 2026)
+# Regression fixes — November 10, 2026
+
+The follow-up audit found defects beyond the original October checks. This
+update fixes seven application findings and reduces dependency exposure:
+
+- Cold launch treats an existing shared vault as authoritative, so deleting a
+  clip, QR entry, or countdown through another surface cannot be undone by an
+  old AsyncStorage backup. Local state migrates only if the shared document is
+  absent.
+- PDF page ranges are validated and clamped before enumeration; enormous and
+  unsafe integers cannot freeze the app while extracting a small document.
+- Each incoming share has a monotonic request identity. Convert, PDF and Stitch
+  remount for new requests even when already open; a later ordinary same-tool
+  URL preserves the newly loaded share.
+- PDF sharing passes every PDF in inbox order. PDF loading now runs in an
+  effect with cancellation/error handling, rather than starting I/O in render.
+- QR destination warnings use canonical URL hostnames, including alternative
+  numeric IP forms, encoded hosts and IPv6. Invalid web addresses are copied
+  instead of offered for opening.
+- Convert marks unreadable image measurements as failed and offers recovery;
+  it no longer repeatedly measures the same corrupt or missing file.
+- Currency conversion rounds the decimal representation before allocating
+  cents, including half-cent ties and exponential notation.
+
+Additional improvements: screenshot sessions paginate beyond 1,000 assets;
+the keyboard refreshes the saved vault/Full Access state while its Clipboard
+tab is visible, without polling the system pasteboard on every timer tick.
+This does **not** establish the cause of the reported missing Clipboard UI on
+a physical phone. Full Access is still required by the current implementation.
+
+Compatible lockfile updates and a narrowly scoped XML-parser override for
+`@expo/plist@0.0.18` reduce npm's affected package count from 25 to 17:
+**0 high, 0 critical, 16 moderate, 1 low** at verification time. The remaining
+advisories concern transitive build/lint tooling (`glob`, `minimatch`, `uuid`,
+`deepmerge` and their dependents). They require upstream updates or separately
+validated major-version substitutions; they are not claimed resolved here.
+
+Verification:
+
+- 87 individual Node tests pass (80 existing plus seven regression tests).
+- TypeScript and lint pass for the changed application/tests.
+- iOS Expo prebuild and release JavaScript/Hermes export pass after dependency
+  updates. The legacy plist consumer works with the patched XML parser during
+  project generation.
+- New **blocking** Maestro flows cover warm Convert sharing, warm multi-PDF
+  sharing/merging, and warm Stitch sharing. They are wired into the existing
+  simulator runner but have **not** been executed in this Linux environment.
+- Swift compilation, simulator UI, and physical-device keyboard behavior still
+  require a macOS/device run. No TestFlight upload is claimed by these checks.
+
+## Original October audit (historical)
 
 Scope: every tool and every iOS surface (app, keyboard, Control Center
 controls, share extension, broadcast extension). Each finding below is

@@ -2,7 +2,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { File } from 'expo-file-system';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Card, Field, GhostButton, PrimaryButton, Segmented, ToolShell } from '../components/ui';
@@ -26,11 +26,11 @@ type Mode = 'merge' | 'split' | 'compress';
  */
 export function PdfScreen({
   onBack,
-  initialPdf,
+  initialPdfs,
   notify,
 }: {
   onBack: () => void;
-  initialPdf?: { uri: string; name: string };
+  initialPdfs?: { uri: string; name: string }[];
   notify: (msg: string) => void;
 }) {
   const [mode, setMode] = useState<Mode>('merge');
@@ -40,15 +40,24 @@ export function PdfScreen({
   const [beforeBytes, setBeforeBytes] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [seeded, setSeeded] = useState(false);
   const [shrinkPhotos, setShrinkPhotos] = useState(true);
 
-  if (initialPdf && !seeded) {
-    setSeeded(true);
-    void pdfSourceFromUri(initialPdf.uri, initialPdf.name, 'pdf').then((s) =>
-      setSources([s]),
-    );
-  }
+  useEffect(() => {
+    if (!initialPdfs?.length) return;
+    let live = true;
+    void Promise.all(initialPdfs.map((p) => pdfSourceFromUri(p.uri, p.name, 'pdf')))
+      .then((loaded) => {
+        if (live) {
+          setSources(loaded);
+          setResult(null);
+          setError(null);
+        }
+      })
+      .catch((e) => {
+        if (live) setError(e instanceof Error ? e.message : 'Couldn’t read the shared PDFs.');
+      });
+    return () => { live = false; };
+  }, [initialPdfs]);
 
   const addPdfs = async () => {
     const res = await DocumentPicker.getDocumentAsync({

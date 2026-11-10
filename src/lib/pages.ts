@@ -2,6 +2,7 @@
 // page numbers, clamped to the document.
 
 export function parsePageSpec(spec: string, maxPage: number): number[] {
+  if (!Number.isSafeInteger(maxPage) || maxPage < 1) return [];
   const pages = new Set<number>();
   for (const part of spec.split(',')) {
     const trimmed = part.trim();
@@ -10,7 +11,10 @@ export function parsePageSpec(spec: string, maxPage: number): number[] {
     if (range) {
       const a = Number(range[1]);
       const b = Number(range[2]);
-      for (let p = Math.min(a, b); p <= Math.max(a, b); p += 1) pages.add(p);
+      if (!Number.isSafeInteger(a) || !Number.isSafeInteger(b)) continue;
+      const start = Math.max(1, Math.min(a, b));
+      const end = Math.min(maxPage, Math.max(a, b));
+      for (let p = start; p <= end; p += 1) pages.add(p);
     } else if (/^\d+$/.test(trimmed)) {
       pages.add(Number(trimmed));
     }

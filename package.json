@@ -43,5 +43,10 @@
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "overrides": {
+    "@expo/plist@0.0.18": {
+      "@xmldom/xmldom": "^0.8.15"
+    }
+  }
 }

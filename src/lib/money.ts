@@ -14,7 +14,11 @@ export interface BillSplit {
 
 export function toCents(dollars: number): number {
   if (!Number.isFinite(dollars) || dollars < 0) return 0;
-  return Math.round(dollars * 100);
+  // Shift the decimal representation before rounding: 1.005 * 100 is
+  // 100.49999999999999 in binary floating point. Also support exponents.
+  const [coefficient, exponent = '0'] = String(dollars).split('e');
+  const cents = Math.round(Number(`${coefficient}e${Number(exponent) + 2}`));
+  return Number.isSafeInteger(cents) ? cents : 0;
 }
 
 /** tipPercent may be fractional (e.g. 17.5). Tip is on the pre-tax total. */

@@ -3,6 +3,7 @@ import * as MediaLibrary from 'expo-media-library/legacy';
 import { readGroupString, writeGroupString } from '../store/sharedVault';
 import { selectSessionShots, type PhotoMeta } from './sessionPick';
 import type { ShotInput } from './stitch';
+import { collectPages } from './pagination';
 
 /**
  * Screenshot sessions: "Start", take ordinary screenshots while
@@ -57,14 +58,8 @@ export interface SessionShot extends ShotInput {
 
 /** Screenshots taken since `startMs`, oldest first, as stitchable files. */
 export async function sessionShots(startMs: number): Promise<SessionShot[]> {
-  const page = await MediaLibrary.getAssetsAsync({
-    mediaType: MediaLibrary.MediaType.photo,
-    mediaSubtypes: ['screenshot'],
-    createdAfter: startMs - 2000,
-    sortBy: [[MediaLibrary.SortBy.creationTime, true]],
-    first: 1000,
-  });
-  const metas: PhotoMeta[] = page.assets.map((a) => ({
+  const assets = await readSessionAssets(startMs);
+  const metas: PhotoMeta[] = assets.map((a) => ({
     id: a.id,
     creationTime: a.creationTime,
     width: a.width,
@@ -74,8 +69,6 @@ export async function sessionShots(startMs: number): Promise<SessionShot[]> {
   const picked = selectSessionShots(metas, startMs);
   const out: SessionShot[] = [];
   for (const meta of picked) {
-    // localUri is a real file:// path the image pipeline can read
-    // (iCloud-only originals are downloaded by Photos on request).
     const info = await MediaLibrary.getAssetInfoAsync(meta.id, {
       shouldDownloadFromNetwork: true,
     });
@@ -85,16 +78,22 @@ export async function sessionShots(startMs: number): Promise<SessionShot[]> {
   return out;
 }
 
-/** Count only (cheap) — for the live "N screenshots so far" line. */
-export async function countSessionShots(startMs: number): Promise<number> {
-  const page = await MediaLibrary.getAssetsAsync({
+async function readSessionAssets(startMs: number): Promise<MediaLibrary.Asset[]> {
+  return collectPages((after) => MediaLibrary.getAssetsAsync({
     mediaType: MediaLibrary.MediaType.photo,
     mediaSubtypes: ['screenshot'],
     createdAfter: startMs - 2000,
+    sortBy: [[MediaLibrary.SortBy.creationTime, true]],
     first: 1000,
-  });
+    after,
+  }));
+}
+
+/** Count only (cheap) — for the live "N screenshots so far" line. */
+export async function countSessionShots(startMs: number): Promise<number> {
+  const assets = await readSessionAssets(startMs);
   return selectSessionShots(
-    page.assets.map((a) => ({
+    assets.map((a) => ({
       id: a.id,
       creationTime: a.creationTime,
       width: a.width,

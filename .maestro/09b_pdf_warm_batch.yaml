@@ -1,0 +1,14 @@
+appId: app.everytool.ios
+name: An already-open PDF tool receives every PDF in a new share
+---
+- openLink: "everytool://tool/pdf"
+- tapOn:
+    text: "Open"
+    optional: true
+- extendedWaitUntil:
+    visible: "6 pages in order"
+    timeout: 20000
+- tapOn: "Merge into one PDF"
+- extendedWaitUntil:
+    visible: "6 pages · .*"
+    timeout: 30000
