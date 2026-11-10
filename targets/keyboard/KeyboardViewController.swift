@@ -377,13 +377,20 @@ final class KeyboardViewController: UIInputViewController {
     bottom.axis = .horizontal
     bottom.spacing = 5
     bottom.distribution = .fill
-    toggle.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.11).isActive = true
-    globe?.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.08).isActive = true
-    up.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.07).isActive = true
-    left.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.07).isActive = true
-    right.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.07).isActive = true
-    down.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.07).isActive = true
-    ret.widthAnchor.constraint(equalTo: content.widthAnchor, multiplier: 0.14).isActive = true
+    // Fixed widths, never multipliers tied to an ancestor: the device
+    // crash logs (builds 12, 1001, 1003) show the extension aborting
+    // inside buildKeys on a setActive: throw for a mutually-exclusive
+    // constraint, and these multiplier-to-content width activations
+    // were the only ones of their kind in the keyboard. A lone constant
+    // width on a key cannot fight the stack or the system; the space
+    // key (no width) absorbs whatever width is left over.
+    toggle.widthAnchor.constraint(equalToConstant: 46).isActive = true
+    globe?.widthAnchor.constraint(equalToConstant: 40).isActive = true
+    up.widthAnchor.constraint(equalToConstant: 32).isActive = true
+    left.widthAnchor.constraint(equalToConstant: 32).isActive = true
+    right.widthAnchor.constraint(equalToConstant: 32).isActive = true
+    down.widthAnchor.constraint(equalToConstant: 32).isActive = true
+    ret.widthAnchor.constraint(equalToConstant: 60).isActive = true
     stack.addArrangedSubview(bottom)
   }
 
