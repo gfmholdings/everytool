@@ -150,6 +150,128 @@ enum SharedVault {
     }
   }
 
+  // MARK: - Image clips (keyboard)
+  //
+  // Copied screenshots and photos, kept apart from the text clips: the
+  // state document gains an "imageClips" array of
+  // { id, file, hash, pinned, createdAt } and the JPEG bytes live in
+  // ClipImages/ in the group container. The app ignores the key for
+  // now (its clip shape is text-only); the read-modify-write pattern
+  // preserves it like every other key. A keyboard cannot insert an
+  // image into a text field — an image clip is copied back to the
+  // system pasteboard and the user pastes it in the host app.
+
+  static let maxImageClips = 100
+
+  static func imageClips() -> [[String: Any]] {
+    let raw = state()["imageClips"] as? [[String: Any]] ?? []
+    return raw.sorted { a, b in
+      let ap = (a["pinned"] as? Bool) ?? false
+      let bp = (b["pinned"] as? Bool) ?? false
+      if ap != bp { return ap && !bp }
+      let at = (a["createdAt"] as? Double) ?? 0
+      let bt = (b["createdAt"] as? Double) ?? 0
+      return at > bt
+    }
+  }
+
+  private static func mutateImageClips(
+    _ change: (inout [[String: Any]]) -> Void
+  ) -> Bool {
+    var dict = state()
+    var images = dict["imageClips"] as? [[String: Any]] ?? []
+    change(&images)
+    dict["imageClips"] = images
+    if dict["qrHistory"] == nil { dict["qrHistory"] = [] as [Any] }
+    return writeState(dict)
+  }
+
+  static func clipImagesDir() -> URL? {
+    guard let container = containerURL() else { return nil }
+    let dir = container.appendingPathComponent("ClipImages", isDirectory: true)
+    try? FileManager.default.createDirectory(
+      at: dir, withIntermediateDirectories: true)
+    return dir
+  }
+
+  static func imageClipURL(_ file: String) -> URL? {
+    clipImagesDir()?.appendingPathComponent(file)
+  }
+
+  /// A stable-enough fingerprint of image bytes for "already saved?"
+  /// checks and save-time dedupe (FNV-1a over a sampled prefix — the
+  /// keyboard hashes a small thumbnail render, so identical copies of
+  /// the same image land on the same value).
+  static func imageHash(_ data: Data) -> String {
+    var hash: UInt64 = 0xcbf29ce484222325
+    let step = max(1, data.count / 4096)
+    var i = 0
+    while i < data.count {
+      hash ^= UInt64(data[i])
+      hash = hash &* 0x100000001b3
+      i += step
+    }
+    return String(hash, radix: 16)
+  }
+
+  /// Stores JPEG bytes as a new image clip. Saving the same image
+  /// again (same hash) bumps the existing clip to the top.
+  @discardableResult
+  static func saveImageClip(jpeg: Data, hash: String) -> Bool {
+    if let existing = imageClips().first(where: { ($0["hash"] as? String) == hash }),
+      let id = existing["id"] as? String
+    {
+      return mutateImageClips { images in
+        if let i = images.firstIndex(where: { ($0["id"] as? String) == id }) {
+          images[i]["createdAt"] = nowMs()
+        }
+      }
+    }
+    guard let dir = clipImagesDir() else { return false }
+    let id = "\(Int(nowMs()))-kb\(UUID().uuidString.prefix(6).lowercased())"
+    let file = "\(id).jpg"
+    do {
+      try jpeg.write(to: dir.appendingPathComponent(file), options: .atomic)
+    } catch { return false }
+    return mutateImageClips { images in
+      images.insert(
+        ["id": id, "file": file, "hash": hash, "pinned": false, "createdAt": nowMs()],
+        at: 0)
+      while images.count > maxImageClips,
+        let last = images.lastIndex(where: { !(($0["pinned"] as? Bool) ?? false) })
+      {
+        if let stale = images[last]["file"] as? String,
+          let url = imageClipURL(stale)
+        {
+          try? FileManager.default.removeItem(at: url)
+        }
+        images.remove(at: last)
+      }
+    }
+  }
+
+  @discardableResult
+  static func toggleImagePin(id: String) -> Bool {
+    mutateImageClips { images in
+      if let i = images.firstIndex(where: { ($0["id"] as? String) == id }) {
+        let pinned = (images[i]["pinned"] as? Bool) ?? false
+        images[i]["pinned"] = !pinned
+      }
+    }
+  }
+
+  @discardableResult
+  static func deleteImageClip(id: String) -> Bool {
+    if let clip = imageClips().first(where: { ($0["id"] as? String) == id }),
+      let file = clip["file"] as? String, let url = imageClipURL(file)
+    {
+      try? FileManager.default.removeItem(at: url)
+    }
+    return mutateImageClips { images in
+      images.removeAll { ($0["id"] as? String) == id }
+    }
+  }
+
   // MARK: - Share inbox
 
   /// Copy a shared file into ShareInbox and append its index entry.

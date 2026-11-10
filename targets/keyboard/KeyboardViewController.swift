@@ -8,6 +8,10 @@ import UIKit
 ///   Group) and the system pasteboard. Paste, Copy, Cut and Save act on
 ///   the text field you are typing in; each saved clip can be inserted,
 ///   copied, edited (typed with these same keys), pinned or deleted.
+///   Copied images ride along as image clips: visible as thumbnails,
+///   saved into the vault, and copied back to the pasteboard on tap —
+///   a keyboard cannot insert an image into a text field, so the user
+///   pastes it in the host app.
 /// - Text tools: counts and extraction over the text around the cursor.
 ///
 /// iOS rules this keyboard lives by:
@@ -653,6 +657,8 @@ final class KeyboardViewController: UIInputViewController {
       ? SharedVault.defaults?.string(forKey: SharedVault.stateKey) : nil
     rowTexts.removeAll()
     rowIds.removeAll()
+    imageRowFiles.removeAll()
+    imageRowIds.removeAll()
     let outer = UIStackView()
     outer.axis = .vertical
     outer.spacing = 6
@@ -709,16 +715,30 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     let clips = SharedVault.clips()
+    let images = SharedVault.imageClips()
 
     // The current system clipboard rides on top, with a one-tap Save,
     // unless it's already a saved clip.
+    var showedLiveHeader = false
     let current = pasteboardText.trimmingCharacters(in: .whitespacesAndNewlines)
     if !current.isEmpty && !clips.contains(where: { ($0["text"] as? String) == current }) {
       stack.addArrangedSubview(sectionLabel("On the clipboard now"))
+      showedLiveHeader = true
       stack.addArrangedSubview(clipRow(id: nil, text: current, pinned: false))
     }
+    if let liveImage = pasteboardImage {
+      let liveHash = thumbnailJPEG(liveImage, maxDimension: 256)
+        .map { SharedVault.imageHash($0) }
+      if !images.contains(where: { ($0["hash"] as? String) == liveHash }) {
+        if !showedLiveHeader {
+          stack.addArrangedSubview(sectionLabel("On the clipboard now"))
+        }
+        stack.addArrangedSubview(
+          imageClipRow(id: nil, file: nil, pinned: false, liveImage: liveImage))
+      }
+    }
 
-    if clips.isEmpty {
+    if clips.isEmpty && images.isEmpty {
       let label = UILabel()
       label.text = "No saved clips yet. Select text and tap Copy or Cut, tap Save to keep what's on the clipboard, or New to type one."
       label.font = .systemFont(ofSize: 14)
@@ -728,13 +748,25 @@ final class KeyboardViewController: UIInputViewController {
       stack.addArrangedSubview(label)
       return
     }
-    stack.addArrangedSubview(sectionLabel("Saved · tap to insert · [word] + space expands"))
-    for clip in clips {
-      guard let text = clip["text"] as? String else { continue }
-      let id = clip["id"] as? String
-      let pinned = (clip["pinned"] as? Bool) ?? false
-      let shortcut = (clip["shortcut"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-      stack.addArrangedSubview(clipRow(id: id, text: text, pinned: pinned, shortcut: shortcut))
+    if !images.isEmpty {
+      stack.addArrangedSubview(
+        sectionLabel("Images · tap to copy, then paste in the app"))
+      for clip in images {
+        guard let file = clip["file"] as? String else { continue }
+        let id = clip["id"] as? String
+        let pinned = (clip["pinned"] as? Bool) ?? false
+        stack.addArrangedSubview(imageClipRow(id: id, file: file, pinned: pinned))
+      }
+    }
+    if !clips.isEmpty {
+      stack.addArrangedSubview(sectionLabel("Saved · tap to insert · [word] + space expands"))
+      for clip in clips {
+        guard let text = clip["text"] as? String else { continue }
+        let id = clip["id"] as? String
+        let pinned = (clip["pinned"] as? Bool) ?? false
+        let shortcut = (clip["shortcut"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        stack.addArrangedSubview(clipRow(id: id, text: text, pinned: pinned, shortcut: shortcut))
+      }
     }
   }
 
@@ -750,6 +782,8 @@ final class KeyboardViewController: UIInputViewController {
   /// at tap time so an edit made elsewhere is never inserted stale.
   private var rowTexts: [Int: String] = [:]
   private var rowIds: [Int: String] = [:]
+  private var imageRowFiles: [Int: String] = [:]
+  private var imageRowIds: [Int: String] = [:]
   private var nextRowTag = 1000
 
   private func registerRow(id: String?, text: String) -> Int {
@@ -813,6 +847,143 @@ final class KeyboardViewController: UIInputViewController {
     return row
   }
 
+  /// The image on the system clipboard, if any (Full Access only).
+  private var pasteboardImage: UIImage? {
+    guard hasFullAccess, UIPasteboard.general.hasImages else { return nil }
+    return UIPasteboard.general.image
+  }
+
+  /// A bounded JPEG render of a clipboard image. The 256px form is
+  /// hashed for "already saved?" checks — identical copies of the same
+  /// image render identical bytes — and the 1024px form is what gets
+  /// stored, so a saved screenshot stays light in the vault.
+  private func thumbnailJPEG(_ image: UIImage, maxDimension: CGFloat) -> Data? {
+    let longest = max(image.size.width, image.size.height)
+    let scale = longest > 0 ? min(1, maxDimension / longest) : 1
+    let size = CGSize(
+      width: max(1, (image.size.width * scale).rounded()),
+      height: max(1, (image.size.height * scale).rounded()))
+    let renderer = UIGraphicsImageRenderer(size: size)
+    let rendered = renderer.image { _ in
+      image.draw(in: CGRect(origin: .zero, size: size))
+    }
+    return rendered.jpegData(compressionQuality: 0.7)
+  }
+
+  /// One image clip: a thumbnail and a label; the icons copy, pin and
+  /// delete. A row with id == nil is the live pasteboard image (save
+  /// only). Keyboards cannot insert images into a text field, so a
+  /// saved image is copied back to the clipboard and pasted in the app.
+  private func imageClipRow(
+    id: String?, file: String?, pinned: Bool, liveImage: UIImage? = nil
+  ) -> UIView {
+    nextRowTag += 1
+    let tag = nextRowTag
+    if let id { imageRowIds[tag] = id }
+    if let file { imageRowFiles[tag] = file }
+    let row = UIStackView()
+    row.axis = .horizontal
+    row.spacing = 4
+    row.alignment = .center
+
+    let thumb = UIImageView()
+    thumb.contentMode = .scaleAspectFill
+    thumb.clipsToBounds = true
+    thumb.layer.cornerRadius = 8
+    thumb.backgroundColor = specialBackground
+    if let liveImage {
+      thumb.image = liveImage
+    } else if let file, let url = SharedVault.imageClipURL(file) {
+      thumb.image = UIImage(contentsOfFile: url.path)
+    }
+    thumb.widthAnchor.constraint(equalToConstant: 46).isActive = true
+    thumb.heightAnchor.constraint(equalToConstant: 46).isActive = true
+    row.addArrangedSubview(thumb)
+
+    let main = UIButton(type: .system)
+    main.setTitle(
+      (pinned ? "★ " : "") + (id == nil ? "Image on the clipboard" : "Saved image"),
+      for: .normal)
+    main.setTitleColor(.label, for: .normal)
+    main.titleLabel?.font = .systemFont(ofSize: 15)
+    main.contentHorizontalAlignment = .left
+    main.backgroundColor = keyBackground
+    main.layer.cornerRadius = 8
+    main.contentEdgeInsets = UIEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
+    main.tag = tag
+    main.accessibilityLabel = id == nil ? "Image on the clipboard" : "Saved image"
+    main.addTarget(
+      self,
+      action: id == nil
+        ? #selector(saveImageRowTapped(_:)) : #selector(copyImageRowTapped(_:)),
+      for: .touchUpInside)
+    main.heightAnchor.constraint(greaterThanOrEqualToConstant: 40).isActive = true
+    main.setContentHuggingPriority(.defaultLow, for: .horizontal)
+    row.addArrangedSubview(main)
+
+    func icon(_ title: String, _ label: String, _ action: Selector) -> UIButton {
+      let b = UIButton(type: .system)
+      b.setTitle(title, for: .normal)
+      b.titleLabel?.font = .systemFont(ofSize: 15)
+      b.backgroundColor = specialBackground
+      b.layer.cornerRadius = 8
+      b.tag = tag
+      b.accessibilityLabel = label
+      b.widthAnchor.constraint(equalToConstant: 34).isActive = true
+      b.heightAnchor.constraint(equalToConstant: 34).isActive = true
+      b.addTarget(self, action: action, for: .touchUpInside)
+      return b
+    }
+
+    if id == nil {
+      let save = icon("＋", "Save image", #selector(saveImageRowTapped(_:)))
+      save.widthAnchor.constraint(equalToConstant: 52).isActive = true
+      row.addArrangedSubview(save)
+    } else {
+      row.addArrangedSubview(icon("⧉", "Copy image", #selector(copyImageRowTapped(_:))))
+      row.addArrangedSubview(icon(pinned ? "★" : "☆", pinned ? "Unpin image" : "Pin image",
+                                   #selector(pinImageRowTapped(_:))))
+      row.addArrangedSubview(icon("✕", "Delete image", #selector(deleteImageRowTapped(_:))))
+    }
+    return row
+  }
+
+  @objc private func saveImageRowTapped(_ sender: UIButton) {
+    guard let image = pasteboardImage else {
+      return flash("No image on the clipboard")
+    }
+    let hash = thumbnailJPEG(image, maxDimension: 256)
+      .map { SharedVault.imageHash($0) } ?? ""
+    guard let jpeg = thumbnailJPEG(image, maxDimension: 1024) else {
+      return flash("Could not save that image")
+    }
+    SharedVault.saveImageClip(jpeg: jpeg, hash: hash)
+    showTab(.clipboard)
+    flash("Image saved")
+  }
+
+  @objc private func copyImageRowTapped(_ sender: UIButton) {
+    guard let file = imageRowFiles[sender.tag],
+      let url = SharedVault.imageClipURL(file),
+      let image = UIImage(contentsOfFile: url.path)
+    else { return flash("That image is missing") }
+    UIPasteboard.general.image = image
+    flash("Copied — paste it in the app")
+  }
+
+  @objc private func pinImageRowTapped(_ sender: UIButton) {
+    guard let id = imageRowIds[sender.tag] else { return }
+    SharedVault.toggleImagePin(id: id)
+    showTab(.clipboard)
+  }
+
+  @objc private func deleteImageRowTapped(_ sender: UIButton) {
+    guard let id = imageRowIds[sender.tag] else { return }
+    SharedVault.deleteImageClip(id: id)
+    showTab(.clipboard)
+    flash("Image deleted")
+  }
+
   // Field actions -----------------------------------------------------
 
   @objc private func pasteTapped() {
@@ -858,12 +1029,21 @@ final class KeyboardViewController: UIInputViewController {
       return flash("Selection saved")
     }
     let text = pasteboardText
-    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-      return flash("Nothing to save — copy or select text")
+    if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      SharedVault.saveClip(text)
+      showTab(.clipboard)
+      return flash("Clipboard saved")
     }
-    SharedVault.saveClip(text)
-    showTab(.clipboard)
-    flash("Clipboard saved")
+    if let image = pasteboardImage {
+      let hash = thumbnailJPEG(image, maxDimension: 256)
+        .map { SharedVault.imageHash($0) } ?? ""
+      if let jpeg = thumbnailJPEG(image, maxDimension: 1024) {
+        SharedVault.saveImageClip(jpeg: jpeg, hash: hash)
+        showTab(.clipboard)
+        return flash("Image saved")
+      }
+    }
+    return flash("Nothing to save — copy or select text")
   }
 
   @objc private func newClipTapped() {
