@@ -186,11 +186,21 @@ export function readPngSize(bytes: Uint8Array): { width: number; height: number 
 }
 
 /**
- * Stream-decode an 8-bit non-interlaced PNG, calling onRow once per row
- * with that row's RGBA pixels (width*4 bytes). The row buffer is REUSED
- * between calls — copy it if you keep it. Pass `stopAfterRow` to stop
- * unfiltering once that row has been delivered (rows are sequential, so
- * the rest of the image is never touched).
+ * Stream-decode a PNG, calling onRow once per row with that row's RGBA
+ * pixels (width*4 bytes). The row buffer is REUSED between calls — copy
+ * it if you keep it. Pass `stopAfterRow` to stop once that row has been
+ * delivered (non-interlaced rows are sequential, so the rest of the
+ * image is never touched).
+ *
+ * Every PNG variant a phone can produce is accepted: 8- and 16-bit
+ * samples (16-bit keeps the high byte), grayscale, gray+alpha, RGB,
+ * RGBA, palette (with tRNS), sub-byte grayscale/palette, and Adam7
+ * interlacing. The narrow first version of this decoder rejected the
+ * 16-bit and interlaced files newer iPhones write, which surfaced in
+ * the app as "Unsupported PNG format." on ordinary screenshots.
+ * Interlaced input is the one non-streaming path: passes scatter
+ * pixels across the frame, so the frame is assembled in memory and
+ * then emitted in row order.
  */
 export function decodePngRows(
   bytes: Uint8Array,
@@ -229,6 +239,8 @@ export function decodePngRows(
   let bitDepth = 8;
   let colorType = 6;
   let interlace = 0;
+  let palette: Uint8Array | null = null;
+  let trns: Uint8Array | null = null;
   const parts: Uint8Array[] = [];
   let idatLength = 0;
   let pos = 8;
@@ -247,6 +259,10 @@ export function decodePngRows(
       bitDepth = bytes[dataStart + 8] ?? 8;
       colorType = bytes[dataStart + 9] ?? 6;
       interlace = bytes[dataStart + 12] ?? 0;
+    } else if (type === 'PLTE') {
+      palette = bytes.subarray(dataStart, dataStart + len);
+    } else if (type === 'tRNS') {
+      trns = bytes.subarray(dataStart, dataStart + len);
     } else if (type === 'IDAT') {
       parts.push(bytes.subarray(dataStart, dataStart + len));
       idatLength += len;
@@ -254,9 +270,6 @@ export function decodePngRows(
       break;
     }
     pos = dataStart + len + 4;
-  }
-  if (bitDepth !== 8 || interlace !== 0 || width === 0) {
-    throw new Error('Unsupported PNG format.');
   }
   const channels =
     colorType === 6
@@ -267,8 +280,26 @@ export function decodePngRows(
           ? 1
           : colorType === 4
             ? 2
-            : 0;
-  if (channels === 0) throw new Error('Unsupported PNG color type.');
+            : colorType === 3
+              ? 1 // palette: one index per pixel until expanded
+              : 0;
+  const allowedDepths: Record<number, number[]> = {
+    0: [1, 2, 4, 8, 16],
+    2: [8, 16],
+    3: [1, 2, 4, 8],
+    4: [8, 16],
+    6: [8, 16],
+  };
+  if (
+    width === 0 ||
+    height === 0 ||
+    channels === 0 ||
+    interlace > 1 ||
+    !(allowedDepths[colorType] ?? []).includes(bitDepth) ||
+    (colorType === 3 && palette === null)
+  ) {
+    throw new Error('Unsupported PNG format.');
+  }
   const idat = new Uint8Array(idatLength);
   let at = 0;
   for (const part of parts) {
@@ -276,73 +307,196 @@ export function decodePngRows(
     at += part.length;
   }
   const raw = unzlibSync(idat);
-  const stride = width * channels;
-  if (raw.length < (stride + 1) * height) {
-    throw new Error('PNG data is truncated.');
-  }
-  let prev = new Uint8Array(stride);
-  let row = new Uint8Array(stride);
-  const rgba = new Uint8Array(width * 4);
-  const last = stopAfterRow === undefined ? height - 1 : Math.min(height - 1, stopAfterRow);
-  for (let y = 0; y <= last; y += 1) {
-    const rowStart = y * (stride + 1);
-    const filter = raw[rowStart];
-    const src = rowStart + 1;
+  const bitsPerPixel = colorType === 3 ? bitDepth : channels * bitDepth;
+  const rowBytes = Math.ceil((width * bitsPerPixel) / 8);
+  // PNG filters predict from the previous pixel's bytes: the distance
+  // is the byte size of one pixel, at least one byte.
+  const filterBpp = Math.max(1, Math.floor(bitsPerPixel / 8));
+
+  /** Unfilter one scanline of `len` bytes from raw[src..] into dest. */
+  const unfilter = (
+    src: number,
+    len: number,
+    prev: Uint8Array,
+    dest: Uint8Array,
+  ): void => {
+    const filter = raw[src];
+    const data = src + 1;
     switch (filter) {
       case 0:
-        row.set(raw.subarray(src, src + stride));
+        dest.set(raw.subarray(data, data + len));
         break;
       case 1:
-        for (let x = 0; x < stride; x += 1) {
-          const a = x >= channels ? row[x - channels]! : 0;
-          row[x] = (raw[src + x]! + a) & 0xff;
+        for (let x = 0; x < len; x += 1) {
+          const a = x >= filterBpp ? dest[x - filterBpp]! : 0;
+          dest[x] = (raw[data + x]! + a) & 0xff;
         }
         break;
       case 2:
-        for (let x = 0; x < stride; x += 1) {
-          row[x] = (raw[src + x]! + prev[x]!) & 0xff;
+        for (let x = 0; x < len; x += 1) {
+          dest[x] = (raw[data + x]! + prev[x]!) & 0xff;
         }
         break;
       case 3:
-        for (let x = 0; x < stride; x += 1) {
-          const a = x >= channels ? row[x - channels]! : 0;
-          row[x] = (raw[src + x]! + ((a + prev[x]!) >> 1)) & 0xff;
+        for (let x = 0; x < len; x += 1) {
+          const a = x >= filterBpp ? dest[x - filterBpp]! : 0;
+          dest[x] = (raw[data + x]! + ((a + prev[x]!) >> 1)) & 0xff;
         }
         break;
       case 4:
-        for (let x = 0; x < stride; x += 1) {
-          const a = x >= channels ? row[x - channels]! : 0;
-          const c = x >= channels ? prev[x - channels]! : 0;
-          row[x] = (raw[src + x]! + paeth(a, prev[x]!, c)) & 0xff;
+        for (let x = 0; x < len; x += 1) {
+          const a = x >= filterBpp ? dest[x - filterBpp]! : 0;
+          const c = x >= filterBpp ? prev[x - filterBpp]! : 0;
+          dest[x] = (raw[data + x]! + paeth(a, prev[x]!, c)) & 0xff;
         }
         break;
       default:
         throw new Error('Corrupt PNG row filter.');
     }
-    if (channels === 4) {
-      rgba.set(row);
-    } else {
-      for (let x = 0, si = 0, di = 0; x < width; x += 1, si += channels, di += 4) {
-        const v = row[si]!;
-        if (channels >= 3) {
-          rgba[di] = v;
-          rgba[di + 1] = row[si + 1]!;
-          rgba[di + 2] = row[si + 2]!;
-          rgba[di + 3] = 255;
-        } else {
-          rgba[di] = v;
-          rgba[di + 1] = v;
-          rgba[di + 2] = v;
-          rgba[di + 3] = channels === 2 ? row[si + 1]! : 255;
-        }
+  };
+
+  const maxSample = (1 << bitDepth) - 1;
+  /** The i-th packed sample (bit depth 1/2/4) of an unfiltered row. */
+  const packedSample = (row: Uint8Array, i: number): number => {
+    const bitPos = i * bitDepth;
+    const byte = row[bitPos >> 3] ?? 0;
+    const shift = 8 - bitDepth - (bitPos & 7);
+    return (byte >> shift) & maxSample;
+  };
+
+  /**
+   * Expand `count` pixels of an unfiltered row to RGBA through `put`.
+   * For 16-bit samples the high byte is the 8-bit value (PNG stores
+   * samples big-endian, and the low byte is precision phones never
+   * display).
+   */
+  const expand = (
+    row: Uint8Array,
+    count: number,
+    put: (x: number, r: number, g: number, b: number, a: number) => void,
+  ): void => {
+    if (colorType === 3) {
+      const pal = palette!;
+      for (let x = 0; x < count; x += 1) {
+        const idx = bitDepth === 8 ? row[x]! : packedSample(row, x);
+        const p = idx * 3;
+        put(
+          x,
+          pal[p] ?? 0,
+          pal[p + 1] ?? 0,
+          pal[p + 2] ?? 0,
+          trns !== null && idx < trns.length ? trns[idx]! : 255,
+        );
+      }
+      return;
+    }
+    if (bitDepth < 8) {
+      // Sub-byte depths are grayscale-only per the spec.
+      for (let x = 0; x < count; x += 1) {
+        const v = Math.round((packedSample(row, x) * 255) / maxSample);
+        put(x, v, v, v, 255);
+      }
+      return;
+    }
+    const sampleBytes = bitDepth / 8; // 1 or 2
+    for (let x = 0; x < count; x += 1) {
+      const base = x * channels * sampleBytes;
+      const s0 = row[base]!;
+      if (channels === 1) {
+        put(x, s0, s0, s0, 255);
+      } else if (channels === 2) {
+        put(x, s0, s0, s0, row[base + sampleBytes]!);
+      } else if (channels === 3) {
+        put(x, s0, row[base + sampleBytes]!, row[base + 2 * sampleBytes]!, 255);
+      } else {
+        put(
+          x,
+          s0,
+          row[base + sampleBytes]!,
+          row[base + 2 * sampleBytes]!,
+          row[base + 3 * sampleBytes]!,
+        );
       }
     }
-    onRow(y, rgba);
-    const t = prev;
-    prev = row;
-    row = t;
+  };
+
+  const last =
+    stopAfterRow === undefined
+      ? height - 1
+      : Math.min(height - 1, stopAfterRow);
+  const rgba = new Uint8Array(width * 4);
+
+  if (interlace === 0) {
+    if (raw.length < (rowBytes + 1) * height) {
+      throw new Error('PNG data is truncated.');
+    }
+    let prev = new Uint8Array(rowBytes);
+    let row = new Uint8Array(rowBytes);
+    for (let y = 0; y <= last; y += 1) {
+      unfilter(y * (rowBytes + 1), rowBytes, prev, row);
+      expand(row, width, (x, r, g, b, a) => {
+        const d = x * 4;
+        rgba[d] = r;
+        rgba[d + 1] = g;
+        rgba[d + 2] = b;
+        rgba[d + 3] = a;
+      });
+      onRow(y, rgba);
+      const t = prev;
+      prev = row;
+      row = t;
+    }
+  } else {
+    // Adam7: seven passes, each with its own filtered scanlines. A
+    // pass covers a strided subset of the frame; pixels scatter into
+    // the assembled frame, which is then emitted in row order.
+    const frame = new Uint8Array(width * height * 4);
+    const passes: [number, number, number, number][] = [
+      [0, 0, 8, 8],
+      [4, 0, 8, 8],
+      [0, 4, 4, 8],
+      [2, 0, 4, 4],
+      [0, 2, 2, 4],
+      [1, 0, 2, 2],
+      [0, 1, 1, 2],
+    ];
+    let offset = 0;
+    for (const [xStart, yStart, xStep, yStep] of passes) {
+      const pw = width > xStart ? Math.ceil((width - xStart) / xStep) : 0;
+      const ph = height > yStart ? Math.ceil((height - yStart) / yStep) : 0;
+      if (pw === 0 || ph === 0) continue;
+      const passRowBytes = Math.ceil((pw * bitsPerPixel) / 8);
+      if (raw.length < offset + (passRowBytes + 1) * ph) {
+        throw new Error('PNG data is truncated.');
+      }
+      let prev = new Uint8Array(passRowBytes);
+      let row = new Uint8Array(passRowBytes);
+      for (let py = 0; py < ph; py += 1) {
+        unfilter(offset, passRowBytes, prev, row);
+        offset += passRowBytes + 1;
+        const y = yStart + py * yStep;
+        expand(row, pw, (px, r, g, b, a) => {
+          const d = (y * width + xStart + px * xStep) * 4;
+          frame[d] = r;
+          frame[d + 1] = g;
+          frame[d + 2] = b;
+          frame[d + 3] = a;
+        });
+        const t = prev;
+        prev = row;
+        row = t;
+      }
+    }
+    for (let y = 0; y <= last; y += 1) {
+      rgba.set(frame.subarray(y * width * 4, (y + 1) * width * 4));
+      onRow(y, rgba);
+    }
   }
-  return { width, height, channels };
+  return {
+    width,
+    height,
+    channels: colorType === 3 ? 4 : channels,
+  };
 }
 
 // -- Streaming PNG writer (stored DEFLATE blocks; valid PNG, no compression)

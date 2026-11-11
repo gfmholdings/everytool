@@ -180,3 +180,234 @@ test('GIF: LZW output decodes back to the source indices', () => {
   }
   assert.deepEqual(out, [...indices]);
 });
+
+// --- Hand-built PNGs for the variants phones actually write -----------
+
+import { zlibSync } from 'fflate';
+
+import { crc32Update } from '../src/lib/deflate.ts';
+
+function chunk(type: string, data: Uint8Array): Uint8Array {
+  const out = new Uint8Array(12 + data.length);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, data.length);
+  for (let i = 0; i < 4; i += 1) out[4 + i] = type.charCodeAt(i);
+  out.set(data, 8);
+  let crc = crc32Update(0xffffffff, out.subarray(4, 8));
+  crc = crc32Update(crc, data);
+  dv.setUint32(8 + data.length, (crc ^ 0xffffffff) >>> 0);
+  return out;
+}
+
+interface PngSpec {
+  width: number;
+  height: number;
+  bitDepth: number;
+  colorType: number;
+  interlace?: number;
+  palette?: Uint8Array;
+  trns?: Uint8Array;
+  /** Scanline bytes, each row prefixed with its filter byte. For
+   * interlaced PNGs, the passes' rows concatenated in pass order. */
+  scanlines: Uint8Array;
+}
+
+function makePng(spec: PngSpec): Uint8Array {
+  const ihdr = new Uint8Array(13);
+  const dv = new DataView(ihdr.buffer);
+  dv.setUint32(0, spec.width);
+  dv.setUint32(4, spec.height);
+  ihdr[8] = spec.bitDepth;
+  ihdr[9] = spec.colorType;
+  ihdr[12] = spec.interlace ?? 0;
+  const parts: Uint8Array[] = [
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+  ];
+  if (spec.palette) parts.push(chunk('PLTE', spec.palette));
+  if (spec.trns) parts.push(chunk('tRNS', spec.trns));
+  parts.push(chunk('IDAT', zlibSync(spec.scanlines)));
+  parts.push(chunk('IEND', new Uint8Array(0)));
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+}
+
+function decodeAll(png: Uint8Array): { rows: Uint8Array[]; channels: number } {
+  const rows: Uint8Array[] = [];
+  const info = decodePngRows(png, (_y, row) => rows.push(new Uint8Array(row)));
+  return { rows, channels: info.channels };
+}
+
+/** 16-bit samples (big-endian) for one filter-0 row of pixels. */
+function row16(samples: number[]): Uint8Array {
+  const out = new Uint8Array(1 + samples.length * 2);
+  samples.forEach((s, i) => {
+    out[1 + i * 2] = (s >> 8) & 0xff;
+    out[2 + i * 2] = s & 0xff;
+  });
+  return out;
+}
+
+test('decodePngRows: 16-bit RGBA keeps the high byte of each sample', () => {
+  const png = makePng({
+    width: 2,
+    height: 1,
+    bitDepth: 16,
+    colorType: 6,
+    scanlines: row16([0xff80, 0x0000, 0x1234, 0xffff, 0x00ff, 0x8001, 0xffff, 0x0000]),
+  });
+  const { rows } = decodeAll(png);
+  assert.deepEqual([...rows[0]!], [0xff, 0x00, 0x12, 0xff, 0x00, 0x80, 0xff, 0x00]);
+});
+
+test('decodePngRows: 16-bit RGB with a Sub filter (filter distance is 6 bytes)', () => {
+  const actual = new Uint8Array(12);
+  [0x0a11, 0x1422, 0x1e33, 0x0b44, 0x1555, 0x1f66].forEach((s, i) => {
+    actual[i * 2] = (s >> 8) & 0xff;
+    actual[i * 2 + 1] = s & 0xff;
+  });
+  const filtered = new Uint8Array(13);
+  filtered[0] = 1; // Sub
+  for (let i = 0; i < 12; i += 1) {
+    filtered[1 + i] = i < 6 ? actual[i]! : (actual[i]! - actual[i - 6]!) & 0xff;
+  }
+  const png = makePng({
+    width: 2, height: 1, bitDepth: 16, colorType: 2, scanlines: filtered,
+  });
+  const { rows } = decodeAll(png);
+  assert.deepEqual([...rows[0]!], [0x0a, 0x14, 0x1e, 255, 0x0b, 0x15, 0x1f, 255]);
+});
+
+test('decodePngRows: 16-bit grayscale', () => {
+  const png = makePng({
+    width: 2, height: 1, bitDepth: 16, colorType: 0,
+    scanlines: row16([0x8080, 0x0102]),
+  });
+  const { rows } = decodeAll(png);
+  assert.deepEqual([...rows[0]!], [0x80, 0x80, 0x80, 255, 0x01, 0x01, 0x01, 255]);
+});
+
+test('decodePngRows: palette PNG expands through PLTE and tRNS', () => {
+  const png = makePng({
+    width: 3, height: 1, bitDepth: 8, colorType: 3,
+    palette: new Uint8Array([255, 0, 0, 0, 255, 0, 0, 0, 255]),
+    trns: new Uint8Array([128]),
+    scanlines: new Uint8Array([0, 0, 1, 2]),
+  });
+  const { rows, channels } = decodeAll(png);
+  assert.equal(channels, 4);
+  assert.deepEqual(
+    [...rows[0]!],
+    [255, 0, 0, 128, 0, 255, 0, 255, 0, 0, 255, 255],
+  );
+});
+
+test('decodePngRows: 4-bit palette indices unpack', () => {
+  const png = makePng({
+    width: 4, height: 1, bitDepth: 4, colorType: 3,
+    palette: new Uint8Array([
+      10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120,
+    ]),
+    scanlines: new Uint8Array([0, 0x01, 0x23]),
+  });
+  const { rows } = decodeAll(png);
+  assert.deepEqual(
+    [...rows[0]!],
+    [10, 20, 30, 255, 40, 50, 60, 255, 70, 80, 90, 255, 100, 110, 120, 255],
+  );
+});
+
+test('decodePngRows: 4-bit grayscale scales to 0-255', () => {
+  const png = makePng({
+    width: 3, height: 1, bitDepth: 4, colorType: 0,
+    scanlines: new Uint8Array([0, 0x08, 0xf0]),
+  });
+  const { rows } = decodeAll(png);
+  assert.deepEqual(
+    [...rows[0]!],
+    [0, 0, 0, 255, 136, 136, 136, 255, 255, 255, 255, 255],
+  );
+});
+
+test('decodePngRows: gray+alpha 8-bit', () => {
+  const png = makePng({
+    width: 2, height: 1, bitDepth: 8, colorType: 4,
+    scanlines: new Uint8Array([0, 200, 90, 30, 255]),
+  });
+  const { rows } = decodeAll(png);
+  assert.deepEqual([...rows[0]!], [200, 200, 200, 90, 30, 30, 30, 255]);
+});
+
+/** Build Adam7 scanlines (filter 0 per pass row) for a pixel pattern. */
+function interlacedScanlines(
+  w: number,
+  h: number,
+  channels: number,
+  pixel: (x: number, y: number) => number[],
+): Uint8Array {
+  const passes: [number, number, number, number][] = [
+    [0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4],
+    [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2],
+  ];
+  const out: number[] = [];
+  for (const [xs, ys, xStep, yStep] of passes) {
+    const pw = w > xs ? Math.ceil((w - xs) / xStep) : 0;
+    const ph = h > ys ? Math.ceil((h - ys) / yStep) : 0;
+    if (pw === 0 || ph === 0) continue; // an empty pass emits nothing
+    for (let py = 0; py < ph; py += 1) {
+      out.push(0);
+      for (let px = 0; px < pw; px += 1) {
+        out.push(...pixel(xs + px * xStep, ys + py * yStep).slice(0, channels));
+      }
+    }
+  }
+  return new Uint8Array(out);
+}
+
+test('decodePngRows: Adam7 interlaced RGBA lands every pixel in place', () => {
+  const w = 8;
+  const h = 8;
+  const pixel = (x: number, y: number) => [x * 30, y * 30, (x + y) * 15, 255];
+  const png = makePng({
+    width: w, height: h, bitDepth: 8, colorType: 6, interlace: 1,
+    scanlines: interlacedScanlines(w, h, 4, pixel),
+  });
+  const { rows } = decodeAll(png);
+  assert.equal(rows.length, h);
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      assert.deepEqual(
+        [...rows[y]!.subarray(x * 4, x * 4 + 4)],
+        pixel(x, y),
+        `pixel ${x},${y}`,
+      );
+    }
+  }
+});
+
+test('decodePngRows: Adam7 interlaced RGB at an odd size', () => {
+  const w = 3;
+  const h = 5;
+  const pixel = (x: number, y: number) => [x * 80 + 5, y * 40 + 9, 200];
+  const png = makePng({
+    width: w, height: h, bitDepth: 8, colorType: 2, interlace: 1,
+    scanlines: interlacedScanlines(w, h, 3, pixel),
+  });
+  const { rows } = decodeAll(png);
+  assert.equal(rows.length, h);
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      assert.deepEqual(
+        [...rows[y]!.subarray(x * 4, x * 4 + 4)],
+        [...pixel(x, y), 255],
+        `pixel ${x},${y}`,
+      );
+    }
+  }
+});

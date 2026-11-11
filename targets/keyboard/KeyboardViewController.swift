@@ -22,6 +22,17 @@ import UIKit
 ///   on whatever the user selected in the field.
 ///
 /// Nothing here touches the network. That is a product promise.
+/// A typing key: swaps its background the instant it is highlighted,
+/// so a fast typist sees the press land. Plain UIButtons keep their
+/// background on highlight, which reads as lag.
+final class KeyButton: UIButton {
+  var baseColor: UIColor = .clear
+  var pressedColor: UIColor = .clear
+  override var isHighlighted: Bool {
+    didSet { backgroundColor = isHighlighted ? pressedColor : baseColor }
+  }
+}
+
 final class KeyboardViewController: UIInputViewController {
   private enum Tab: Int {
     case keys, clipboard, text
@@ -60,6 +71,19 @@ final class KeyboardViewController: UIInputViewController {
   private var vaultRefreshTimer: Timer?
   private var displayedVault: String?
   private var displayedFullAccess = false
+
+  // Typing-speed + suggestions state. letterButtons/shiftButton let a
+  // shift change relabel the keys in place instead of rebuilding the
+  // whole keyboard (the old per-keystroke rebuild dropped fast taps).
+  private var letterButtons: [UIButton] = []
+  private weak var shiftButton: KeyButton?
+  private weak var editorTextLabel: UILabel?
+  private let spellChecker = UITextChecker()
+  private var suggestionButtons: [UIButton] = []
+  private var currentSuggestions: [String] = []
+  /// Set when the bar is offering the duplicate-word fix instead of
+  /// word suggestions.
+  private var doubleWordFix: String?
 
   // MARK: - Lifecycle
 
@@ -142,9 +166,21 @@ final class KeyboardViewController: UIInputViewController {
     vaultRefreshTimer = nil
   }
 
+  override func selectionDidChange(_ textInput: UITextInput?) {
+    super.selectionDidChange(textInput)
+    if currentTab == .keys && editor == nil {
+      updateSuggestions()
+      refreshAutoShift()
+    }
+  }
+
   override func textDidChange(_ textInput: UITextInput?) {
     super.textDidChange(textInput)
     if currentTab == .text { showTab(.text) }
+    if currentTab == .keys && editor == nil {
+      updateSuggestions()
+      refreshAutoShift()
+    }
   }
 
   private func flash(_ message: String) {
@@ -202,7 +238,7 @@ final class KeyboardViewController: UIInputViewController {
     content.subviews.forEach { $0.removeFromSuperview() }
     switch t {
     case .keys:
-      heightConstraint?.constant = editor == nil ? 274 : 334
+      heightConstraint?.constant = editor == nil ? (symbols ? 274 : 320) : 334
       buildKeys()
     case .clipboard:
       heightConstraint?.constant = 320
@@ -231,13 +267,29 @@ final class KeyboardViewController: UIInputViewController {
     }
   }
 
+  private var keyPressedBackground: UIColor {
+    UIColor { traits in
+      traits.userInterfaceStyle == .dark
+        ? UIColor(white: 0.52, alpha: 1)
+        : UIColor(red: 0.8, green: 0.82, blue: 0.87, alpha: 1)
+    }
+  }
+
+  private var specialPressedBackground: UIColor {
+    UIColor { traits in
+      traits.userInterfaceStyle == .dark
+        ? UIColor(white: 0.36, alpha: 1)
+        : UIColor(red: 0.58, green: 0.61, blue: 0.67, alpha: 1)
+    }
+  }
+
   private func makeKey(
     _ title: String,
     special: Bool = false,
     fontSize: CGFloat = 22,
     height: CGFloat = 46
   ) -> UIButton {
-    let b = UIButton(type: .system)
+    let b = KeyButton(type: .system)
     b.setTitle(title, for: .normal)
     b.setTitleColor(.label, for: .normal)
     b.titleLabel?.font = .systemFont(ofSize: fontSize)
@@ -252,6 +304,9 @@ final class KeyboardViewController: UIInputViewController {
     b.layer.shadowRadius = 0
     b.translatesAutoresizingMaskIntoConstraints = false
     b.heightAnchor.constraint(equalToConstant: height).isActive = true
+    b.baseColor = special ? specialBackground : keyBackground
+    b.pressedColor = special ? specialPressedBackground : keyPressedBackground
+    b.backgroundColor = b.baseColor
     return b
   }
 
@@ -286,6 +341,9 @@ final class KeyboardViewController: UIInputViewController {
   }
 
   private func buildKeys() {
+    letterButtons = []
+    shiftButton = nil
+    suggestionButtons = []
     let stack = UIStackView()
     stack.axis = .vertical
     stack.spacing = 8
@@ -302,32 +360,40 @@ final class KeyboardViewController: UIInputViewController {
       stack.addArrangedSubview(editorBar(editor))
     }
 
+    if editor == nil && !symbols {
+      stack.addArrangedSubview(buildSuggestionBar())
+    }
+
     for (index, letters) in letterRows.enumerated() {
       var keys: [UIButton] = []
       if index == 2 && !symbols {
         let title = capsLock ? "⇪" : (shifted ? "⬆︎" : "⇧")
         let shift = makeKey(title, special: true, fontSize: 18)
         shift.accessibilityLabel = capsLock ? "Caps lock" : "Shift"
-        shift.backgroundColor = (shifted || capsLock) ? .white : specialBackground
-        shift.addTarget(self, action: #selector(shiftTapped), for: .touchUpInside)
+        if let kb = shift as? KeyButton {
+          kb.baseColor = (shifted || capsLock) ? .white : specialBackground
+          kb.backgroundColor = kb.baseColor
+          shiftButton = kb
+        }
+        shift.addTarget(self, action: #selector(shiftTapped), for: .touchDown)
         keys.append(shift)
       }
       if index == 2 && symbols {
         let more = makeKey(symbolsPage2 ? "123" : "#+=", special: true, fontSize: 16)
-        more.addTarget(self, action: #selector(symbolsMoreTapped), for: .touchUpInside)
+        more.addTarget(self, action: #selector(symbolsMoreTapped), for: .touchDown)
         keys.append(more)
       }
       for letter in letters {
         let upper = !symbols && (shifted || capsLock)
         let key = makeKey(upper ? letter.uppercased() : letter, fontSize: symbols ? 20 : 22)
         key.accessibilityLabel = letter
-        key.addTarget(self, action: #selector(charTapped(_:)), for: .touchUpInside)
+        key.addTarget(self, action: #selector(charTapped(_:)), for: .touchDown)
+        letterButtons.append(key)
         keys.append(key)
       }
       if index == 2 {
         let del = makeKey("⌫", special: true, fontSize: 18)
         del.accessibilityLabel = "Delete"
-        del.addTarget(self, action: #selector(deleteTapped), for: .touchUpInside)
         del.addTarget(self, action: #selector(deleteDown), for: .touchDown)
         del.addTarget(
           self,
@@ -341,7 +407,7 @@ final class KeyboardViewController: UIInputViewController {
 
     // Bottom row: page toggle, [globe], cursor left, space, cursor right, return.
     let toggle = makeKey(symbols ? "ABC" : "123", special: true, fontSize: 16)
-    toggle.addTarget(self, action: #selector(pageTapped), for: .touchUpInside)
+    toggle.addTarget(self, action: #selector(pageTapped), for: .touchDown)
     var bottomKeys: [UIButton] = [toggle]
     var globe: UIButton?
     if needsInputModeSwitchKey {
@@ -357,20 +423,20 @@ final class KeyboardViewController: UIInputViewController {
     }
     let up = makeKey("▲", special: true, fontSize: 13)
     up.accessibilityLabel = "Move cursor up"
-    up.addTarget(self, action: #selector(cursorUp), for: .touchUpInside)
+    up.addTarget(self, action: #selector(cursorUp), for: .touchDown)
     let left = makeKey("◀︎", special: true, fontSize: 14)
     left.accessibilityLabel = "Move cursor left"
-    left.addTarget(self, action: #selector(cursorLeft), for: .touchUpInside)
+    left.addTarget(self, action: #selector(cursorLeft), for: .touchDown)
     let space = makeKey("space", fontSize: 16)
-    space.addTarget(self, action: #selector(spaceTapped), for: .touchUpInside)
+    space.addTarget(self, action: #selector(spaceTapped), for: .touchDown)
     let right = makeKey("▶︎", special: true, fontSize: 14)
     right.accessibilityLabel = "Move cursor right"
-    right.addTarget(self, action: #selector(cursorRight), for: .touchUpInside)
+    right.addTarget(self, action: #selector(cursorRight), for: .touchDown)
     let down = makeKey("▼", special: true, fontSize: 13)
     down.accessibilityLabel = "Move cursor down"
-    down.addTarget(self, action: #selector(cursorDown), for: .touchUpInside)
+    down.addTarget(self, action: #selector(cursorDown), for: .touchDown)
     let ret = makeKey(editor == nil ? "return" : "⏎", special: true, fontSize: 16)
-    ret.addTarget(self, action: #selector(returnTapped), for: .touchUpInside)
+    ret.addTarget(self, action: #selector(returnTapped), for: .touchDown)
     bottomKeys += [up, left, space, right, down, ret]
 
     let bottom = UIStackView(arrangedSubviews: bottomKeys)
@@ -392,6 +458,7 @@ final class KeyboardViewController: UIInputViewController {
     down.widthAnchor.constraint(equalToConstant: 32).isActive = true
     ret.widthAnchor.constraint(equalToConstant: 60).isActive = true
     stack.addArrangedSubview(bottom)
+    refreshAutoShift()
   }
 
   /// The clip editor: shows the draft (typed with these keys), Save and
@@ -416,6 +483,7 @@ final class KeyboardViewController: UIInputViewController {
     label.setContentHuggingPriority(.defaultLow, for: .horizontal)
     label.heightAnchor.constraint(equalToConstant: 48).isActive = true
     label.accessibilityIdentifier = "kb.editor.text"
+    editorTextLabel = label
 
     let cancel = smallButton("Cancel", tag: 0, action: #selector(editorCancel))
     let save = smallButton("Save", tag: 0, action: #selector(editorSave))
@@ -431,10 +499,18 @@ final class KeyboardViewController: UIInputViewController {
 
   /// All typing goes through here: into the clip draft while editing,
   /// otherwise into the host text field.
+  /// The system key click, played on every key action. Together with
+  /// touch-down firing and the pressed-key highlight this is what makes
+  /// the keyboard feel as fast as the stock one.
+  private func keyFeedback() {
+    UIDevice.current.playInputClick()
+  }
+
   private func typeText(_ text: String) {
+    keyFeedback()
     if editor != nil {
       editor?.text += text
-      showTab(.keys)
+      refreshEditorLabel()
     } else {
       textDocumentProxy.insertText(text)
     }
@@ -443,7 +519,7 @@ final class KeyboardViewController: UIInputViewController {
   private func backspace() {
     if editor != nil {
       if !(editor?.text.isEmpty ?? true) { editor?.text.removeLast() }
-      showTab(.keys)
+      refreshEditorLabel()
     } else {
       textDocumentProxy.deleteBackward()
     }
@@ -455,7 +531,7 @@ final class KeyboardViewController: UIInputViewController {
     typeText(upper ? letter.uppercased() : letter)
     if shifted && !capsLock {
       shifted = false
-      showTab(.keys)
+      refreshKeyLabels()
     }
   }
 
@@ -473,7 +549,8 @@ final class KeyboardViewController: UIInputViewController {
       shifted.toggle()
       lastShiftAt = Date()
     }
-    showTab(.keys)
+    keyFeedback()
+    refreshKeyLabels()
   }
 
   @objc private func pageTapped() {
@@ -487,11 +564,8 @@ final class KeyboardViewController: UIInputViewController {
     showTab(.keys)
   }
 
-  @objc private func deleteTapped() {
-    backspace()
-  }
-
   @objc private func deleteDown() {
+    backspace()
     deleteTimer?.invalidate()
     deleteTimer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: false) {
       [weak self] _ in
@@ -599,11 +673,16 @@ final class KeyboardViewController: UIInputViewController {
       lastSpaceAt = nil
       return
     }
+    autocorrectBeforeDelimiter()
     // Double-tap space ends the sentence, like the system keyboard.
     if let last = lastSpaceAt, Date().timeIntervalSince(last) < 0.3 {
       backspace()
       typeText(". ")
       lastSpaceAt = nil
+      if !capsLock && !symbols {
+        shifted = true
+        refreshKeyLabels()
+      }
       return
     }
     typeText(" ")
@@ -611,6 +690,7 @@ final class KeyboardViewController: UIInputViewController {
   }
 
   @objc private func returnTapped() {
+    autocorrectBeforeDelimiter()
     typeText("\n")
   }
 
@@ -635,6 +715,250 @@ final class KeyboardViewController: UIInputViewController {
     self.editor = nil
     showTab(.clipboard)
     flash("Saved")
+  }
+
+  // MARK: - Suggestions, autocorrect, label refresh
+
+  private var spellLanguage: String {
+    (primaryLanguage ?? "en_US").replacingOccurrences(of: "-", with: "_")
+  }
+
+  /// The word fragment immediately before the cursor (letters and
+  /// apostrophes). Empty right after a delimiter.
+  private var currentWord: String {
+    let before = textDocumentProxy.documentContextBeforeInput ?? ""
+    var word: [Character] = []
+    for ch in before.reversed() {
+      if ch.isLetter || ch == "'" {
+        word.append(ch)
+      } else {
+        break
+      }
+    }
+    return String(word.reversed())
+  }
+
+  /// Completed words before the cursor, oldest first.
+  private func completedWords() -> [String] {
+    let before = textDocumentProxy.documentContextBeforeInput ?? ""
+    var words: [String] = []
+    var cur = ""
+    for ch in before {
+      if ch.isLetter || ch == "'" {
+        cur.append(ch)
+      } else if !cur.isEmpty {
+        words.append(cur)
+        cur = ""
+      }
+    }
+    if !cur.isEmpty { words.append(cur) }
+    return words
+  }
+
+  private func buildSuggestionBar() -> UIView {
+    let bar = UIStackView()
+    bar.axis = .horizontal
+    bar.distribution = .fillEqually
+    bar.spacing = 6
+    bar.translatesAutoresizingMaskIntoConstraints = false
+    bar.heightAnchor.constraint(equalToConstant: 38).isActive = true
+    for i in 0..<3 {
+      let b = UIButton(type: .system)
+      b.titleLabel?.font = .systemFont(ofSize: 15, weight: i == 0 ? .semibold : .regular)
+      b.titleLabel?.lineBreakMode = .byTruncatingTail
+      b.setTitleColor(.label, for: .normal)
+      b.tag = i
+      b.isHidden = true
+      b.accessibilityIdentifier = "kb.suggestion.\(i)"
+      b.addTarget(self, action: #selector(suggestionTapped(_:)), for: .touchDown)
+      suggestionButtons.append(b)
+      bar.addArrangedSubview(b)
+    }
+    return bar
+  }
+
+  private func setSuggestions(_ list: [String]) {
+    currentSuggestions = list
+    for (i, b) in suggestionButtons.enumerated() {
+      if i < list.count {
+        b.setTitle(list[i], for: .normal)
+        b.isHidden = false
+      } else {
+        b.setTitle(nil, for: .normal)
+        b.isHidden = true
+      }
+    }
+  }
+
+  /// Refresh the bar from the text before the cursor: completions for
+  /// a word still being typed, spelling guesses for a misspelled one,
+  /// and a one-tap fix when the last two completed words are the same
+  /// ("the the"). All from UITextChecker — on-device, no Full Access,
+  /// no network.
+  private func updateSuggestions() {
+    doubleWordFix = nil
+    guard editor == nil, !symbols else {
+      setSuggestions([])
+      return
+    }
+    let word = currentWord
+    if word.isEmpty {
+      let before = textDocumentProxy.documentContextBeforeInput ?? ""
+      if before.hasSuffix(" ") {
+        let words = completedWords()
+        if words.count >= 2 {
+          let a = words[words.count - 2]
+          let b = words[words.count - 1]
+          if a.count >= 2 && a.lowercased() == b.lowercased() {
+            doubleWordFix = b
+            setSuggestions(["Fix: \(a) \(b) → \(b)"])
+            return
+          }
+        }
+      }
+      setSuggestions([])
+      return
+    }
+    let language = spellLanguage
+    let ns = word as NSString
+    let full = NSRange(location: 0, length: ns.length)
+    let miss = spellChecker.rangeOfMisspelledWord(
+      in: word, range: full, startingAt: 0, wrap: false, language: language)
+    if miss.location != NSNotFound {
+      let guesses = spellChecker.guesses(
+        forWordRange: full, misspelledWordRange: miss, language: language) ?? []
+      setSuggestions(Array(guesses.prefix(3)))
+    } else {
+      var comps = spellChecker.completions(
+        forPartialWordRange: full, in: word, language: language) ?? []
+      comps.removeAll { $0.lowercased() == word.lowercased() }
+      setSuggestions(Array(comps.prefix(3)))
+    }
+  }
+
+  @objc private func suggestionTapped(_ sender: UIButton) {
+    keyFeedback()
+    if let fix = doubleWordFix, sender.tag == 0 {
+      // Context ends "<word> <word> ": drop the duplicate and its
+      // trailing space, then restore the single space.
+      for _ in 0..<(fix.count + 1) { textDocumentProxy.deleteBackward() }
+      textDocumentProxy.insertText(" ")
+      doubleWordFix = nil
+      setSuggestions([])
+      return
+    }
+    guard sender.tag < currentSuggestions.count else { return }
+    let word = currentWord
+    guard !word.isEmpty else { return }
+    let pick = currentSuggestions[sender.tag]
+    for _ in 0..<word.count { textDocumentProxy.deleteBackward() }
+    textDocumentProxy.insertText(pick + " ")
+    setSuggestions([])
+  }
+
+  /// Fixes that must not wait for the spell checker: contractions and
+  /// the classic typos. Keys are the typed (lowercase) forms.
+  private static let builtinFixes: [String: String] = [
+    "i": "I", "im": "I'm", "ill": "I'll", "ive": "I've", "id": "I'd",
+    "dont": "don't", "cant": "can't", "wont": "won't", "isnt": "isn't",
+    "didnt": "didn't", "doesnt": "doesn't", "couldnt": "couldn't",
+    "wouldnt": "wouldn't", "shouldnt": "shouldn't", "thats": "that's",
+    "lets": "let's", "youre": "you're", "theyre": "they're",
+    "teh": "the", "adress": "address", "recieve": "receive",
+    "seperate": "separate", "occured": "occurred", "untill": "until",
+    "accross": "across", "definately": "definitely", "wich": "which",
+    "thier": "their", "freind": "friend", "freinds": "friends",
+    "beleive": "believe", "acheive": "achieve", "calender": "calendar",
+    "neccessary": "necessary", "remeber": "remember",
+    "tommorrow": "tomorrow", "truely": "truly", "wierd": "weird",
+    "writting": "writing", "comming": "coming", "geting": "getting",
+    "happend": "happened", "begining": "beginning", "finaly": "finally",
+    "realy": "really", "greatful": "grateful", "immediatly": "immediately",
+    "goverment": "government", "enviroment": "environment",
+    "independant": "independent", "posession": "possession",
+  ]
+
+  private func matchCase(of typed: String, to fix: String) -> String {
+    if typed.count > 1 && typed == typed.uppercased() {
+      return fix.uppercased()
+    }
+    if let first = typed.first, first.isUppercase {
+      return fix.prefix(1).uppercased() + String(fix.dropFirst())
+    }
+    return fix
+  }
+
+  /// Runs when a word ends (space / return): swap in the built-in fix
+  /// or the spell checker's top guess, case-matched. Computed fresh —
+  /// never from the bar's possibly stale state — so fast typing can't
+  /// outrun it.
+  private func autocorrectBeforeDelimiter() {
+    guard editor == nil, !symbols else { return }
+    let word = currentWord
+    guard !word.isEmpty else { return }
+    var fix: String?
+    if let mapped = Self.builtinFixes[word.lowercased()] {
+      fix = mapped
+    } else if word.count >= 3 {
+      let language = spellLanguage
+      let ns = word as NSString
+      let full = NSRange(location: 0, length: ns.length)
+      let miss = spellChecker.rangeOfMisspelledWord(
+        in: word, range: full, startingAt: 0, wrap: false, language: language)
+      if miss.location != NSNotFound {
+        fix = spellChecker.guesses(
+          forWordRange: full, misspelledWordRange: miss,
+          language: language)?.first
+      }
+    }
+    guard let raw = fix else { return }
+    let adjusted = matchCase(of: word, to: raw)
+    guard adjusted != word else { return }
+    for _ in 0..<word.count { textDocumentProxy.deleteBackward() }
+    textDocumentProxy.insertText(adjusted)
+  }
+
+  /// Relabel the letter keys and the shift key for the current shift
+  /// state — in place, no rebuild.
+  private func refreshKeyLabels() {
+    let upper = !symbols && (shifted || capsLock)
+    for b in letterButtons {
+      guard let letter = b.accessibilityLabel else { continue }
+      b.setTitle(upper ? letter.uppercased() : letter, for: .normal)
+    }
+    if let shift = shiftButton {
+      shift.setTitle(capsLock ? "⇪" : (shifted ? "⬆︎" : "⇧"), for: .normal)
+      shift.accessibilityLabel = capsLock ? "Caps lock" : "Shift"
+      shift.baseColor = (shifted || capsLock) ? .white : specialBackground
+      if !shift.isHighlighted { shift.backgroundColor = shift.baseColor }
+    }
+  }
+
+  /// Sentence-start detection: arm shift at the start of a field and
+  /// after sentence-ending punctuation, like the stock keyboard.
+  private func refreshAutoShift() {
+    guard editor == nil, !symbols, !capsLock else { return }
+    let before = textDocumentProxy.documentContextBeforeInput ?? ""
+    let boundary =
+      before.isEmpty
+      || before.hasSuffix(". ")
+      || before.hasSuffix("! ")
+      || before.hasSuffix("? ")
+      || before.hasSuffix("\n")
+    if boundary != shifted {
+      shifted = boundary
+      refreshKeyLabels()
+    }
+  }
+
+  /// The clip editor's text, updated in place while typing (the old
+  /// code rebuilt the whole keyboard on every character).
+  private func refreshEditorLabel() {
+    guard let editor, let label = editorTextLabel else { return }
+    label.text = editor.text.isEmpty
+      ? (editor.id == nil ? "New clip — type it below" : "Empty")
+      : editor.text + "▏"
+    label.textColor = editor.text.isEmpty ? .secondaryLabel : .label
   }
 
   // MARK: - Clipboard tab
