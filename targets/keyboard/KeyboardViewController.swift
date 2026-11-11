@@ -826,7 +826,7 @@ final class KeyboardViewController: UIInputViewController {
       in: word, range: full, startingAt: 0, wrap: false, language: language)
     if miss.location != NSNotFound {
       let guesses = spellChecker.guesses(
-        forWordRange: full, misspelledWordRange: miss, language: language) ?? []
+        forWordRange: miss, in: word, language: language) ?? []
       setSuggestions(Array(guesses.prefix(3)))
     } else {
       var comps = spellChecker.completions(
@@ -907,7 +907,7 @@ final class KeyboardViewController: UIInputViewController {
         in: word, range: full, startingAt: 0, wrap: false, language: language)
       if miss.location != NSNotFound {
         fix = spellChecker.guesses(
-          forWordRange: full, misspelledWordRange: miss,
+          forWordRange: miss, in: word,
           language: language)?.first
       }
     }
